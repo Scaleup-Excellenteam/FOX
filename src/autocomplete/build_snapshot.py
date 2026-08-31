@@ -80,7 +80,9 @@ def extract_zip_corpus(
         or limits.max_entry_uncompressed_bytes < 0
         or limits.max_compression_ratio <= 0
     ):
-        raise ZipInputError("ZIP extraction limits must be non-negative and ratio positive")
+        raise ZipInputError(
+            "ZIP extraction limits must be non-negative and ratio positive"
+        )
     started = time.perf_counter()
     try:
         archive = zipfile.ZipFile(archive_path)
@@ -178,8 +180,14 @@ def extract_zip_corpus(
                 uncompressed_bytes += entry_bytes
             elapsed_ms = (time.perf_counter() - started) * 1_000
             return ZipExtractionStats(
-                len(infos), processed, records, directories, unsupported,
-                elapsed_ms, uncompressed_bytes, archive_path.stat().st_size,
+                len(infos),
+                processed,
+                records,
+                directories,
+                unsupported,
+                elapsed_ms,
+                uncompressed_bytes,
+                archive_path.stat().st_size,
             )
     except BaseException:
         if destination_created:
@@ -228,14 +236,20 @@ def build_snapshot_from_input(
     if corpus_or_zip.is_dir():
         return run(corpus_or_zip)
     if corpus_or_zip.suffix.lower() != ".zip":
-        raise ZipInputError(f"input must be a corpus directory or .zip file: {corpus_or_zip}")
+        raise ZipInputError(
+            f"input must be a corpus directory or .zip file: {corpus_or_zip}"
+        )
     with tempfile.TemporaryDirectory(prefix="fox-corpus-") as temporary:
         extracted = Path(temporary) / "corpus"
         stats = extract_zip_corpus(corpus_or_zip, extracted, limits=zip_limits)
         result = run(extracted)
         sentence_match = re.search(r"(?:^| )sentences=(\d+)(?: |$)", result.stdout)
         record_count = int(sentence_match.group(1)) if sentence_match else 0
-        ratio = stats.uncompressed_bytes / stats.archive_bytes if stats.archive_bytes else 0.0
+        ratio = (
+            stats.uncompressed_bytes / stats.archive_bytes
+            if stats.archive_bytes
+            else 0.0
+        )
         prefix = (
             "[PYTHON BUILDER] [ZIP EXTRACTION] -> "
             f"Completed archive extraction in {stats.elapsed_ms:,.2f} ms | "
@@ -244,7 +258,8 @@ def build_snapshot_from_input(
             f"(Archive Size: {stats.archive_bytes / 1_000_000:,.2f} MB, "
             f"Ratio: {ratio:,.2f}x).\n"
             f"zip_entries={stats.entries} processed_files={stats.processed_files} "
-            f"zip_records={record_count} skipped_directories={stats.skipped_directories} "
+            f"zip_records={record_count} "
+            f"skipped_directories={stats.skipped_directories} "
             f"skipped_unsupported_files={stats.skipped_unsupported_files}\n"
         )
         return subprocess.CompletedProcess(

@@ -10,7 +10,9 @@ def build_index(texts):
     for identifier, text in texts.items():
         for size in (1, 2, 3):
             for position in range(len(text) - size + 1):
-                postings.setdefault((size, text[position : position + size]), set()).add(identifier)
+                postings.setdefault(
+                    (size, text[position : position + size]), set()
+                ).add(identifier)
     return SearchIndex(postings, texts)
 
 

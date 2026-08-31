@@ -26,7 +26,9 @@ def build_zip_snapshot(builder, archive, snapshot):
 def test_real_zip_to_snapshot_to_candidate_flow(builder, tmp_path):
     archive = tmp_path / "corpus.zip"
     make_zip(archive)
-    result, (records, index) = build_zip_snapshot(builder, archive, tmp_path / "snapshot")
+    result, (records, index) = build_zip_snapshot(
+        builder, archive, tmp_path / "snapshot"
+    )
 
     assert "zip_entries=4 processed_files=2 zip_records=7" in result.stdout
     assert "[PYTHON BUILDER] [ZIP EXTRACTION]" in result.stdout
@@ -47,12 +49,20 @@ def test_real_zip_to_snapshot_to_candidate_flow(builder, tmp_path):
     ]
 
     # Character segments shorter than, equal to, and longer than the maximum n=3.
-    assert {(size, gram) for size, gram in index.postings if 3 in index.postings[(size, gram)]} == {
+    assert {
+        (size, gram)
+        for size, gram in index.postings
+        if 3 in index.postings[(size, gram)]
+    } == {
         (1, "h"),
         (1, "i"),
         (2, "hi"),
     }
-    assert {(size, gram) for size, gram in index.postings if 4 in index.postings[(size, gram)]} == {
+    assert {
+        (size, gram)
+        for size, gram in index.postings
+        if 4 in index.postings[(size, gram)]
+    } == {
         (1, "a"),
         (1, "b"),
         (1, "c"),
@@ -60,7 +70,11 @@ def test_real_zip_to_snapshot_to_candidate_flow(builder, tmp_path):
         (2, "bc"),
         (3, "abc"),
     }
-    assert {(size, gram) for size, gram in index.postings if 5 in index.postings[(size, gram)]} == {
+    assert {
+        (size, gram)
+        for size, gram in index.postings
+        if 5 in index.postings[(size, gram)]
+    } == {
         (1, "a"),
         (1, "b"),
         (1, "c"),
@@ -88,9 +102,13 @@ def test_real_zip_to_snapshot_to_candidate_flow(builder, tmp_path):
     }
     for key, expected_ids in to_be_grams.items():
         assert index.postings[key] == expected_ids
-    assert index.postings[(3, "ana")] == (2,)  # Repeated twice in record 2, stored once.
+    assert index.postings[(3, "ana")] == (
+        2,
+    )  # Repeated twice in record 2, stored once.
     assert index.get_candidate_ids("to be") == [1, 6]
-    assert [records[identifier].original for identifier in index.get_candidate_ids("to be")] == [
+    assert [
+        records[identifier].original for identifier in index.get_candidate_ids("to be")
+    ] == [
         "To be or not to be",
         "To be again",
     ]
@@ -133,9 +151,9 @@ def test_corrupted_real_zip_snapshot_is_rejected(builder, tmp_path):
     make_zip(archive)
     snapshot = tmp_path / "snapshot"
     build_zip_snapshot(builder, archive, snapshot)
-    shard = next(snapshot.glob("index-*.binpb"))
+    shard = snapshot / "index.binpb"
     data = bytearray(shard.read_bytes())
     data[-5] ^= 1
     shard.write_bytes(data)
-    with pytest.raises(SnapshotError, match="checksum mismatch"):
+    with pytest.raises(SnapshotError, match="corrupt posting|index digest mismatch"):
         load_snapshot(snapshot)

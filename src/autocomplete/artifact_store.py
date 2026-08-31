@@ -53,7 +53,9 @@ class LocalArtifactStore:
         if destination.exists():
             raise FileExistsError(f"destination already exists: {destination}")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
+        staging = Path(
+            tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent)
+        )
         try:
             staged_snapshot = staging / "snapshot"
             # Preserve links during the copy so a source-tree race cannot make
@@ -92,7 +94,9 @@ class GCSArtifactStore:
         if destination.exists():
             raise FileExistsError(f"destination already exists: {destination}")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
+        staging = Path(
+            tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent)
+        )
         try:
             object_prefix = prefix.rstrip("/") + "/"
             blobs = list(self._client.list_blobs(bucket_name, prefix=object_prefix))
@@ -107,7 +111,11 @@ class GCSArtifactStore:
                     )
                 relative = blob.name[len(object_prefix) :]
                 relative_path = Path(relative)
-                if not relative or relative_path.is_absolute() or ".." in relative_path.parts:
+                if (
+                    not relative
+                    or relative_path.is_absolute()
+                    or ".." in relative_path.parts
+                ):
                     raise RuntimeError(f"unsafe object name in snapshot: {blob.name}")
                 relative_name = relative_path.as_posix()
                 if relative_name in staged_relative_names:

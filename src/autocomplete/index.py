@@ -13,7 +13,9 @@ class PostingArray(array):
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, (tuple, list)):
-            return len(self) == len(other) and all(left == right for left, right in zip(self, other))
+            return len(self) == len(other) and all(
+                left == right for left, right in zip(self, other, strict=True)
+            )
         return bool(super().__eq__(other))
 
     __hash__ = None
@@ -49,7 +51,7 @@ class FrozenPosting(Sequence[int]):
         if not isinstance(other, Sequence):
             return False
         return len(self) == len(other) and all(
-            left == right for left, right in zip(self, other)
+            left == right for left, right in zip(self, other, strict=True)
         )
 
     __hash__ = None
@@ -118,9 +120,7 @@ class SearchIndex:
     ) -> SearchIndex:
         """Construct from loader-validated sorted, unique uint32 sequences."""
         instance = cls.__new__(cls)
-        instance._postings = {
-            key: FrozenPosting(ids) for key, ids in postings.items()
-        }
+        instance._postings = {key: FrozenPosting(ids) for key, ids in postings.items()}
         instance._all_sentence_ids = FrozenPosting(all_sentence_ids)
         instance._postings_view = MappingProxyType(instance._postings)
         return instance

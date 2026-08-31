@@ -18,9 +18,7 @@ def test_builder_timeout_kills_process_and_cleans_extraction(monkeypatch, tmp_pa
 
     slow_builder = tmp_path / "slow_builder.py"
     slow_builder.write_text(
-        "#!/usr/bin/env python3\n"
-        "import time\n"
-        "time.sleep(30)\n",
+        "#!/usr/bin/env python3\nimport time\ntime.sleep(30)\n",
         encoding="utf-8",
     )
     slow_builder.chmod(0o755)
@@ -39,7 +37,9 @@ def test_builder_timeout_kills_process_and_cleans_extraction(monkeypatch, tmp_pa
         tracked_temporary_directory,
     )
     started = time.perf_counter()
-    with pytest.raises(BuildError, match="timed out after 0.05 seconds and was killed") as error:
+    with pytest.raises(
+        BuildError, match="timed out after 0.05 seconds and was killed"
+    ) as error:
         build_snapshot_from_input(
             slow_builder,
             archive,

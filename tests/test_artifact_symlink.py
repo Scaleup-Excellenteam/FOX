@@ -7,7 +7,9 @@ import pytest
 from autocomplete.artifact_store import ArtifactError, LocalArtifactStore
 
 
-def test_local_materialization_rejects_symlink_without_copying_target(builder, tmp_path):
+def test_local_materialization_rejects_symlink_without_copying_target(
+    builder, tmp_path
+):
     corpus = tmp_path / "corpus"
     corpus.mkdir()
     (corpus / "records.txt").write_text("to be\n", encoding="utf-8")
@@ -29,6 +31,7 @@ def test_local_materialization_rejects_symlink_without_copying_target(builder, t
     assert outside.read_text(encoding="utf-8") == "must never be copied"
     assert (source / "leaked.txt").is_symlink()
     assert not any(
-        path.name == "leaked.txt" for path in tmp_path.rglob("leaked.txt")
+        path.name == "leaked.txt"
+        for path in tmp_path.rglob("leaked.txt")
         if path != source / "leaked.txt"
     )

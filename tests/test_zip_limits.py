@@ -36,9 +36,7 @@ def test_zip_entry_count_limit_cleans_destination(tmp_path):
     _make_zip(archive, [("one.txt", b"1"), ("two.txt", b"2")])
 
     with pytest.raises(ZipInputError, match="entry count limit"):
-        extract_zip_corpus(
-            archive, destination, limits=_limits(max_entries=1)
-        )
+        extract_zip_corpus(archive, destination, limits=_limits(max_entries=1))
 
     assert not destination.exists()
 
@@ -48,7 +46,9 @@ def test_zip_declared_entry_size_limit_cleans_destination(tmp_path):
     destination = tmp_path / "extracted"
     _make_zip(archive, [("large.txt", b"12345678901")])
 
-    with pytest.raises(ZipInputError, match="per-entry uncompressed size limit.*large.txt"):
+    with pytest.raises(
+        ZipInputError, match="per-entry uncompressed size limit.*large.txt"
+    ):
         extract_zip_corpus(
             archive,
             destination,
@@ -99,11 +99,15 @@ class _LyingArchive:
         return io.BytesIO(b"x" * 20)
 
 
-def test_zip_actual_bytes_over_declared_limit_cleans_partial_output(monkeypatch, tmp_path):
+def test_zip_actual_bytes_over_declared_limit_cleans_partial_output(
+    monkeypatch, tmp_path
+):
     archive = tmp_path / "lying.zip"
     archive.write_bytes(b"placeholder")
     destination = tmp_path / "extracted"
-    monkeypatch.setattr(build_snapshot.zipfile, "ZipFile", lambda _path: _LyingArchive())
+    monkeypatch.setattr(
+        build_snapshot.zipfile, "ZipFile", lambda _path: _LyingArchive()
+    )
 
     with pytest.raises(ZipInputError, match="actual per-entry size limit.*bomb.txt"):
         extract_zip_corpus(

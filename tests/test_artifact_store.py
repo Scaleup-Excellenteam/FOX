@@ -3,8 +3,11 @@ import subprocess
 
 import pytest
 
-from autocomplete.artifact_store import ArtifactError
-from autocomplete.artifact_store import GCSArtifactStore, LocalArtifactStore
+from autocomplete.artifact_store import (
+    ArtifactError,
+    GCSArtifactStore,
+    LocalArtifactStore,
+)
 from autocomplete.snapshot_loader import SnapshotError, load_snapshot
 
 
@@ -22,7 +25,9 @@ def test_local_copy_identity_and_runtime_use(builder, tmp_path):
     store = LocalArtifactStore()
     destination = store.materialize_snapshot(str(source), tmp_path / "destination")
     records, index = load_snapshot(destination)
-    assert [(identifier, record.original) for identifier, record in records.items()] == [
+    assert [
+        (identifier, record.original) for identifier, record in records.items()
+    ] == [
         (1, "to be"),
         (2, "hello world"),
     ]
@@ -78,7 +83,10 @@ class SnapshotClient:
 
     def list_blobs(self, bucket, prefix):
         assert bucket == "bucket"
-        return [FileBlob(prefix + path.name, path) for path in sorted(self._source.iterdir())]
+        return [
+            FileBlob(prefix + path.name, path)
+            for path in sorted(self._source.iterdir())
+        ]
 
 
 def test_gcs_materializes_valid_snapshot_once_for_local_runtime(builder, tmp_path):

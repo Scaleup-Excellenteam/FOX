@@ -60,7 +60,7 @@ jobs:
           cp src/autocomplete/generated/autocomplete_snapshot_pb2.py \
             /tmp/autocomplete_snapshot_pb2.py.committed
           scripts/generate_proto.sh
-          diff --exit-code \
+          diff -u \
             /tmp/autocomplete_snapshot_pb2.py.committed \
             src/autocomplete/generated/autocomplete_snapshot_pb2.py
           source .venv/bin/activate

@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package fox.autocomplete.snapshot.v1;
+
+message SnapshotManifest {
+  uint32 schema_version = 1;
+  uint32 framing_version = 2;
+  uint64 sentence_count = 3;
+  NormalizationSpec normalization = 4;
+  NGramIndexSpec ngram_index = 5;
+  repeated ShardMetadata record_shards = 6;
+  repeated ShardMetadata index_shards = 7;
+  string snapshot_id = 8;
+  bytes corpus_digest = 9;
+  string created_at_utc = 10;
+  bytes index_digest = 11;
+}
+
+message NormalizationSpec {
+  uint32 version = 1;
+  string algorithm = 2;
+}
+
+message NGramIndexSpec {
+  uint32 version = 1;
+  repeated uint32 gram_codepoints = 2;
+  uint32 min_selective_query_codepoints = 3;
+  uint64 shard_target_bytes = 4;
+}
+
+enum ShardKind {
+  SHARD_KIND_UNSPECIFIED = 0;
+  SHARD_KIND_RECORDS = 1;
+  SHARD_KIND_INDEX = 2;
+}
+
+message ShardMetadata {
+  string file_name = 1;
+  ShardKind kind = 2;
+  uint64 framed_size_bytes = 3;
+  uint64 frame_count = 4;
+  bytes sha256 = 5;
+  uint32 first_gram_size = 6;
+  string first_gram = 7;
+  uint32 last_gram_size = 8;
+  string last_gram = 9;
+}
+
+message SentenceRecord {
+  uint64 sentence_id = 1;
+  string source_relative_path = 2;
+  uint64 source_line_number = 3;
+  string original_text = 4;
+  string normalized_text = 5;
+}
+
+message PostingChunk {
+  uint32 gram_size = 1;
+  string gram = 2;
+  uint32 chunk_index = 3;
+  bool is_last_chunk = 4;
+  repeated uint64 sentence_ids = 5 [packed = true];
+}
+
+// Shards start with 8-byte "FOXSNAP1", uint32-le framing version and
+// uint32-le kind. Each frame is uint32-le payload length, protobuf payload,
+// and uint32-le CRC32C(payload). A payload may not exceed 8 MiB.

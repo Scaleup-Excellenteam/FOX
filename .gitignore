@@ -1,10 +1,12 @@
 # Extracted corpus - generated locally from Archive.zip
 data/corpus/*
 !data/corpus/.gitkeep
+data/extracted/
 
 # Generated offline snapshots
 data/snapshots/*
 !data/snapshots/.gitkeep
+artifacts/
 
 # Python
 __pycache__/
@@ -13,6 +15,8 @@ __pycache__/
 venv/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+*.egg-info/
 
 # C++ / CMake
 build/

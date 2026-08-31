@@ -1,0 +1,9 @@
+[
+ {"input":"Hello,       WORLD!!!","expected":"hello world"},
+ {"input":"  Leading and trailing  ","expected":"leading and trailing"},
+ {"input":"can't-stop","expected":"cantstop"},
+ {"input":"!@#$%^&*()","expected":""},
+ {"input":"","expected":""},
+ {"input":"A  B... C","expected":"a b c"},
+ {"input":"שלום, WORLD","expected":"שלום world"}
+]

@@ -18,7 +18,7 @@ def make_zip(path):
 
 
 def build_zip_snapshot(builder, archive, snapshot):
-    result = build_snapshot_from_input(builder, archive, snapshot, shard_bytes=1024)
+    result = build_snapshot_from_input(builder, archive, snapshot)
     assert result.returncode == 0, result.stderr
     return result, load_snapshot(snapshot)
 

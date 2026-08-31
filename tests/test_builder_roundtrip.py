@@ -12,7 +12,7 @@ from autocomplete.snapshot_loader import load_snapshot
 
 def run(builder, corpus, output):
     return subprocess.run(
-        [str(builder), str(corpus), str(output), "1024"],
+        [str(builder), "--corpus", str(corpus), "--output", str(output)],
         text=True,
         capture_output=True,
         check=False,
@@ -97,7 +97,13 @@ def test_empty_and_normalized_empty_records_are_skipped(builder, tmp_path):
 
 def test_failures_leave_no_partial_snapshot(builder, tmp_path):
     missing = subprocess.run(
-        [str(builder), str(tmp_path / "missing"), str(tmp_path / "out")],
+        [
+            str(builder),
+            "--corpus",
+            str(tmp_path / "missing"),
+            "--output",
+            str(tmp_path / "out"),
+        ],
         text=True,
         capture_output=True,
         check=False,

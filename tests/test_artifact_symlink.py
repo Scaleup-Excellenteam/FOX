@@ -15,7 +15,7 @@ def test_local_materialization_rejects_symlink_without_copying_target(
     (corpus / "records.txt").write_text("to be\n", encoding="utf-8")
     source = tmp_path / "source"
     subprocess.run(
-        [str(builder), str(corpus), str(source), "1024"],
+        [str(builder), "--corpus", str(corpus), "--output", str(source)],
         check=True,
     )
     outside = tmp_path / "outside-secret.txt"

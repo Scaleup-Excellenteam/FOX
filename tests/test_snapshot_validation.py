@@ -17,7 +17,9 @@ def build(builder, tmp_path):
     corpus.mkdir(parents=True)
     (corpus / "a.txt").write_text("to be or not to be\nabcdefghi\n", encoding="utf-8")
     snapshot = tmp_path / "snapshot"
-    subprocess.run([str(builder), str(corpus), str(snapshot), "1024"], check=True)
+    subprocess.run(
+        [str(builder), "--corpus", str(corpus), "--output", str(snapshot)], check=True
+    )
     return snapshot
 
 

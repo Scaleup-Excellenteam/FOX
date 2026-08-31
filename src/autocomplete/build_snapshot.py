@@ -104,7 +104,7 @@ def extract_zip_corpus(
 
             declared_total = 0
             for info, relative in validated:
-                if info.is_dir() or relative.suffix != ".txt":
+                if info.is_dir() or relative.suffix.lower() != ".txt":
                     continue
                 if info.file_size > limits.max_entry_uncompressed_bytes:
                     raise ZipInputError(
@@ -137,7 +137,7 @@ def extract_zip_corpus(
                 if info.is_dir():
                     directories += 1
                     continue
-                if relative.suffix != ".txt":
+                if relative.suffix.lower() != ".txt":
                     unsupported += 1
                     continue
                 if info.flag_bits & 0x1:
@@ -199,7 +199,6 @@ def build_snapshot_from_input(
     builder: Path,
     corpus_or_zip: Path,
     snapshot: Path,
-    shard_bytes: int | None = None,
     *,
     zip_limits: ZipExtractionLimits | None = None,
     builder_timeout_seconds: float = 600.0,
@@ -212,9 +211,13 @@ def build_snapshot_from_input(
         raise BuildError("builder timeout must be greater than zero seconds")
 
     def run(corpus: Path) -> subprocess.CompletedProcess[str]:
-        command = [str(builder), str(corpus), str(snapshot)]
-        if shard_bytes is not None:
-            command.append(str(shard_bytes))
+        command = [
+            str(builder),
+            "--corpus",
+            str(corpus),
+            "--output",
+            str(snapshot),
+        ]
         try:
             return subprocess.run(
                 command,
@@ -271,14 +274,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Build a FOX snapshot from a corpus directory or ZIP"
     )
-    parser.add_argument("builder", type=Path, help="path to fox_snapshot_builder")
+    parser.add_argument("builder", type=Path, help="path to autocomplete_builder")
     parser.add_argument("corpus_or_zip", type=Path)
     parser.add_argument("snapshot", type=Path)
-    parser.add_argument("--shard-bytes", type=int)
     args = parser.parse_args()
     try:
         result = build_snapshot_from_input(
-            args.builder, args.corpus_or_zip, args.snapshot, args.shard_bytes
+            args.builder, args.corpus_or_zip, args.snapshot
         )
     except (ZipInputError, BuildError) as exc:
         parser.exit(1, f"error: {exc}\n")

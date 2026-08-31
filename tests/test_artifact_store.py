@@ -16,7 +16,9 @@ def make_snapshot(builder, tmp_path):
     corpus.mkdir()
     (corpus / "records.txt").write_text("to be\nhello world\n", encoding="utf-8")
     snapshot = tmp_path / "source"
-    subprocess.run([str(builder), str(corpus), str(snapshot), "1024"], check=True)
+    subprocess.run(
+        [str(builder), "--corpus", str(corpus), "--output", str(snapshot)], check=True
+    )
     return snapshot
 
 

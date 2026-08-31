@@ -1,13 +1,11 @@
 # Google Autocomplete
 
-This repository is the shared Phase 0 foundation for the Google Autocomplete
-Part A project. Part A has an offline C++ preprocessing stage and an online
-Python completion stage. The offline stage will eventually turn an extracted
-text corpus into a versioned local Protobuf snapshot; the online stage will
-eventually load that snapshot once and answer autocomplete queries. Phase 0
-defines their shared models, schema, contracts, packaging, and build plumbing
-only. It contains no corpus traversal, indexing, matching, ranking, search
-engine, builder executable, or CLI implementation.
+This branch implements the Part A offline C++ preprocessing stage and Python
+snapshot-loading/candidate-index stage. The production `autocomplete_builder`
+turns a corpus directory into a deterministic versioned Protobuf snapshot;
+Python validates and loads that snapshot into `SentenceRecord` objects and a
+recall-safe `SearchIndex`. Matching, scoring, ranking, the public SearchEngine,
+and the interactive CLI remain owned by their separate Part A branches.
 
 ## Team boundaries
 
@@ -28,7 +26,7 @@ The Phase 0 toolchain tested on Ubuntu 24.04 is:
 | --- | --- |
 | Python | 3.12.3 |
 | Python environment | repository-local `.venv` |
-| C++ standard | C++20 |
+| C++ standard | C++17 |
 | GCC | 13.3.0 |
 | CMake | 3.28.3 |
 | `protoc` / C++ `libprotobuf` | 3.21.12 |
@@ -95,8 +93,9 @@ cmake --build build/cpp
 ctest --test-dir build/cpp --output-on-failure
 ```
 
-The current executable is an infrastructure-only Protobuf smoke test. The
-offline builder belongs to a later feature branch.
+The build produces both the infrastructure Protobuf smoke test and the
+production `autocomplete_builder`. CTest also exercises normalization,
+UTF-8 handling, and Unicode code-point n-gram helpers.
 
 ## Corpus preparation and future builder contract
 
@@ -108,7 +107,7 @@ mkdir -p data/corpus
 unzip data/raw/Archive.zip -d data/corpus
 ```
 
-Member 2 will implement this frozen command contract after Phase 0:
+Build a snapshot with the frozen command contract:
 
 ```bash
 ./build/cpp/autocomplete_builder \
@@ -116,5 +115,10 @@ Member 2 will implement this frozen command contract after Phase 0:
   --output <snapshot-directory>
 ```
 
-Phase 0 uses local files only. GCS, cloud credentials, external services, and
-all Part B features are explicitly outside its scope.
+The builder recursively processes `.txt` files, writes through a sibling
+incomplete directory, and atomically publishes `manifest.binpb`,
+`records.binpb`, and `index.binpb` only after the full build succeeds. Direct
+ZIP parsing is intentionally not implemented: SPEC v2.1 defines extraction
+before invocation, while `python -m autocomplete.build_snapshot` provides the
+bounded temporary-extraction integration path. Part A remains locally usable
+without cloud credentials.

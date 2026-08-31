@@ -1,18 +1,10 @@
-# 03_SEARCH_QUALITY_CLI_SPEC.md
-
-# SPEC 3 — Search Integration, Reference Engine, CLI & Quality
+# SPEC 3 — Search Integration, Reference Validation, CLI & Quality v2.1
 
 ## Role
 
-**Search Orchestration, Ranking, Official API, Reference Validation, CLI & End-to-End Quality**
+**Runtime Orchestration, Ranking, Official API, Reference/Differential Validation, CLI, Local Startup & Online Quality**
 
-**Architecture baseline:** v1.1
-
-Use this file together with `00_TEAM_BASELINE.md`.
-
-If anything conflicts, `00_TEAM_BASELINE.md` wins.
-
----
+Use with `00_TEAM_BASELINE.md` and `PHASE0_SHARED_FOUNDATION_SPEC.md`.
 
 ## 1. Branch
 
@@ -20,41 +12,11 @@ If anything conflicts, `00_TEAM_BASELINE.md` wins.
 feature/search-quality
 ```
 
----
+It must start from the frozen `PHASE0_COMMIT`.
 
-## 2. Primary Responsibility
+## 2. Ownership
 
-You own:
-
-```text
-ranking
-SearchEngine orchestration
-official get_best_k_completions() facade
-Reference Engine
-differential testing
-official regression tests
-integration tests
-CLI
-startup integration with loaded snapshot
-end-to-end quality gates
-```
-
-You do **not** own:
-
-```text
-canonical normalization semantics
-matcher algorithm
-scoring penalties
-C++ corpus traversal
-C++ 1/2/3-Gram construction
-Protobuf snapshot writer internals
-SearchIndex two-part candidate algorithm
-GCS implementation internals
-```
-
----
-
-## 3. Files You Primarily Own
+You own primarily:
 
 ```text
 src/autocomplete/ranking.py
@@ -71,25 +33,17 @@ tests/test_official_examples.py
 tests/test_reference_vs_indexed.py
 tests/test_cli.py
 tests/test_integration.py
+
+benchmarks/ online search benchmark harness
 ```
 
-You will integrate with:
+You also own local runtime startup/configuration from a snapshot path.
 
-```text
-Member 1 normalize()
-Member 1 match_and_score()
-Member 2 snapshot loader
-Member 2 SearchIndex
-Member 2 ArtifactStore
-```
+You do not own normalization semantics, matcher/scoring, C++ builder, Protobuf writer/framing internals, snapshot loader internals, or SearchIndex candidate logic.
 
-Do not duplicate those implementations.
+Until Member 2 is ready, use fakes/mocks that implement only the frozen SearchIndex/loader-facing contracts. Do not copy her algorithm.
 
----
-
-# 4. Ranking API
-
-Implement:
+## 3. Ranking
 
 ```python
 def rank_results(
@@ -98,22 +52,27 @@ def rank_results(
     ...
 ```
 
-Rules:
+Required ordering:
 
 ```text
 1. score descending
-2. completed_sentence alphabetical for equal score
+2. completed_sentence ascending
 ```
 
-Reference and optimized engines must use this exact function.
+Freeze `completed_sentence ascending` as Python/Unicode lexicographic ordering of the **original** completed sentence. Do not normalize, lowercase, or strip punctuation for ranking.
 
-Do not rely on candidate order, sentence ID order, file order, or discovery order for final ranking.
+Deterministic extension only when those are exactly equal:
 
----
+```text
+3. source_text ascending
+4. offset ascending
+```
 
-# 5. Optimized SearchEngine
+Do not rely on candidate order, sentence ID, corpus traversal order, or Python dict order.
 
-Preferred internal API:
+Do not deduplicate different source records.
+
+## 4. SearchEngine
 
 ```python
 class SearchEngine:
@@ -136,33 +95,25 @@ Required flow:
 
 ```text
 prefix
- ↓
-normalize(prefix)
- ↓
-index.get_candidate_ids(normalized_query)
- ↓
-record lookup by sentence_id
- ↓
-match_and_score(normalized_query, record.normalized)
- ↓
-discard None
- ↓
-create AutoCompleteData
- ↓
-rank_results()
- ↓
-first k
+→ normalize(prefix)
+→ if normalized query == "": return []
+→ index.get_candidate_ids(normalized_query)
+→ lookup record
+→ match_and_score(normalized_query, record.normalized)
+→ discard None
+→ preserve every integer score, including legal negative scores
+→ convert to AutoCompleteData
+→ rank_results
+→ first k
 ```
 
-Do not reimplement matching or scoring.
+For internal `k`, require an integer `k >= 0`; `k == 0` returns `[]`. Negative `k` raises `ValueError`.
 
-`SearchEngine` must treat `SearchIndex.get_candidate_ids()` as an opaque recall-safe candidate source. It must not duplicate partitioning or gram logic.
+If SearchIndex returns an unknown sentence ID at runtime, fail clearly rather than silently ignoring snapshot corruption.
 
----
+## 5. Result Conversion
 
-# 6. Result Conversion
-
-For every valid match:
+For every legal record:
 
 ```python
 AutoCompleteData(
@@ -173,273 +124,154 @@ AutoCompleteData(
 )
 ```
 
-Required properties:
+Never expose normalized text as the completed sentence.
 
-```text
-original sentence preserved
-relative POSIX source path preserved
-1-based line number preserved
-score comes only from match_and_score()
-```
+## 6. Official Google-Facing API
 
----
-
-# 7. Official Google-Facing API
-
-Implement a public facade with the exact required signature:
+File: `src/autocomplete/api.py`
 
 ```python
-def get_best_k_completions(
-    prefix: str,
-) -> list[AutoCompleteData]:
+from typing import List
+
+
+def configure_default_engine(engine: SearchEngine) -> None:
+    ...
+
+
+def get_best_k_completions(prefix: str) -> List[AutoCompleteData]:
     ...
 ```
 
-It must return:
+The facade delegates to the configured default engine with `k=5`.
 
-```text
-up to 5 results
+Define a clear error:
+
+```python
+class EngineNotInitializedError(RuntimeError):
+    ...
 ```
 
-Internally it delegates to the initialized default `SearchEngine`.
+Calling `get_best_k_completions` before configuration raises that error. Query calls do not perform snapshot/network recovery.
 
-Do not replace the official facade with only a class method requiring extra arguments.
+## 7. Local Startup
 
----
-
-# 8. Engine Initialization
-
-The online process must initialize once before serving queries.
-
-Conceptual startup:
+Part A startup is local-only:
 
 ```text
-configuration
- ↓
-LocalArtifactStore or GCSArtifactStore
- ↓
-materialize snapshot locally
- ↓
-validate/load snapshot
- ↓
-records_by_id + SearchIndex
- ↓
-construct SearchEngine
- ↓
-install/configure default engine
- ↓
-serve queries
+snapshot path
+→ load_snapshot(snapshot_path)
+→ records_by_id + SearchIndex
+→ SearchEngine
+→ configure_default_engine
+→ CLI loop
 ```
 
-No per-query:
+Recommended invocation contract:
 
-```text
-snapshot reload
-GCS download
-protobuf shard reread from remote storage
+```bash
+python -m autocomplete.main --snapshot data/snapshots/current
 ```
 
-unless a later benchmark-driven design explicitly adds a safe local paging strategy.
+The exact argument parser wording may vary, but startup must accept an explicit local snapshot path and fail clearly for load errors.
 
----
+No GCS/client/network logic belongs in Part A startup.
 
-# 9. Reference Engine
-
-Implement:
+## 8. Reference Engine
 
 ```python
 class ReferenceEngine:
-    def __init__(
-        self,
-        records: list[SentenceRecord],
-    ):
+    def __init__(self, records: list[SentenceRecord]):
         ...
 
-    def search(
-        self,
-        prefix: str,
-        k: int = 5,
-    ) -> list[AutoCompleteData]:
+    def search(self, prefix: str, k: int = 5) -> list[AutoCompleteData]:
         ...
 ```
 
 Flow:
 
 ```text
-prefix
- ↓
-normalize()
- ↓
-ALL SentenceRecords
- ↓
-match_and_score()
- ↓
-valid AutoCompleteData
- ↓
-rank_results()
- ↓
-first k
+normalize
+→ empty? []
+→ all records
+→ same match_and_score
+→ same result conversion
+→ same rank_results
+→ first k
 ```
 
-The Reference Engine does not use candidate pruning.
+It does not use SearchIndex.
 
----
+## 9. Correct Meaning of the Reference Oracle
 
-# 10. Correct Interpretation of "Oracle"
+ReferenceEngine is the **candidate/index optimization oracle**, not an independent matcher oracle.
 
-The Reference Engine is specifically the:
-
-> **candidate-generation / indexing optimization oracle**
-
-Why?
-
-Both engines intentionally reuse:
+Both reference and optimized engines intentionally reuse production:
 
 ```text
-normalize()
-match_and_score()
-rank_results()
+normalize
+match_and_score
+rank_results
 ```
 
-Therefore, if `match_and_score()` has a bug, both engines can share the same bug.
-
-Matcher/scoring correctness is independently protected by:
+Therefore:
 
 ```text
-official Google examples
-Member 1 unit tests
-golden scoring cases
-targeted edge cases
+Reference == Indexed
 ```
 
-Differential tests prove:
+proves candidate pruning/integration did not change results, while Member 1's official/unit/generated exhaustive tests independently protect matcher/scoring correctness.
 
-```text
-optimization did not change the answer
-```
-
----
-
-# 11. Critical Shared-Code Rule
-
-Reference and optimized engines must reuse the same:
-
-```text
-normalize()
-match_and_score()
-rank_results()
-AutoCompleteData conversion semantics
-```
-
-Do not create copies.
-
-Only candidate source differs:
-
-```text
-Reference → all records
-Optimized → SearchIndex candidate IDs
-```
-
----
-
-# 12. Differential Testing
+## 10. Differential Testing
 
 Core assertion:
 
 ```python
-reference = reference_engine.search(query)
-optimized = search_engine.search(query)
-
-assert optimized == reference
+assert search_engine.search(query) == reference_engine.search(query)
 ```
-
-Run across many queries.
 
 Required categories:
 
+- exact beginning/middle/end;
+- substitution;
+- extra query character;
+- missing query character;
+- normalized-empty query;
+- 1-char query;
+- lengths 2, 3, 4, 5, 6+;
+- edit left partition/right partition;
+- edit immediately before/at/after partition split;
+- repeated query occurrence;
+- duplicate text records;
+- same sentence in different files;
+- multiple valid alignments;
+- generated/randomized corpus-derived queries.
+
+Also verify candidate recall before matching:
+
 ```text
-exact substring
-beginning substring
-middle substring
-end substring
-one substitution
-one extra query character
-one missing query character
-1-character query
-2-character query
-3-character query
-4-character query
-5-character query
-6+ character query
-edit in left partition
-edit in right partition
-edit exactly at/near partition boundary
-same query appearing multiple times
-duplicate sentences
-same sentence in different files
-multiple valid alignments
-random/generated queries
+Every record that produces a Reference legal result
+must have its sentence_id in the optimized candidate set.
 ```
 
-Candidate-specific assertions should additionally verify:
+## 11. Generated Differential Cases
+
+Use real normalized corpus sentences or a deterministic small fixture:
 
 ```text
-every result returned by Reference has its sentence_id present
-in the optimized candidate set before verification
-```
-
-If a differential test fails, report enough data to distinguish:
-
-```text
-candidate-recall bug
-partition/seed bug
-posting intersection/union bug
-matcher/scoring issue
-ranking issue
-metadata conversion issue
-```
-
-# 13. Generated Differential Cases
-
-Generate queries from real normalized corpus sentences.
-
-Examples:
-
-```text
-select valid substring
+choose substring
 → exact query
+→ replace one char
+→ insert one extra char
+→ remove one char
 ```
 
-Then derive:
+Exercise query-length buckets and boundary edit positions deliberately.
 
-```text
-replace one character
-insert one extra character
-remove one character
-```
+Use fixed seeds in CI. On failure capture the seed and minimal useful case.
 
-Keep random generation reproducible with a fixed seed in CI.
+## 12. Official Permanent Regression Tests
 
-Store failing seeds/cases when possible.
-
-
-For each generated query of useful length, deliberately place the one edit in:
-
-```text
-left partition
-right partition
-immediately before split
-at split
-immediately after split
-```
-
-Generate length buckets separately so the 1+1, 1+2, 2+2, 2+3, and 3+-gram paths are all exercised.
-
----
-
-# 14. Official Regression Examples
-
-Base sentence:
+Sentence:
 
 ```text
 To be or not to be, that is the question.
@@ -447,91 +279,53 @@ To be or not to be, that is the question.
 
 Expected:
 
-```text
-To be      → 10
-or Not     → 12
-be, that   → 14
-2o be      → 3
-to pe      → 6
-or knot    → 8
-or nt      → 8
-not be     → NO MATCH
-```
+| Query | Expected |
+|---|---:|
+| `To be` | 10 |
+| `or Not` | 12 |
+| `be, that` | 14 |
+| `2o be` | 3 |
+| `to pe` | 6 |
+| `or knot` | 8 |
+| `or nt` | 8 |
+| `not be` | no match |
 
-These tests must remain green after every optimization.
+Integration-level official tests must exercise the public result path, not only Member 1 helpers.
 
----
-
-# 15. SearchEngine Tests
+## 13. SearchEngine Tests
 
 At minimum:
 
-```text
-no candidates
-one candidate
-more than 5 legal matches
-mixed scores
-tie scores
-middle substring
-one-edit result
-candidate false positive discarded
-1-character fallback result verified
-short-query indexed candidate verified
-original sentence preserved
-source path preserved
-offset preserved
-default Top 5
-custom internal k
-```
+- empty normalized query returns `[]` without index call;
+- no candidates;
+- candidate false positive discarded;
+- candidate valid match converted correctly;
+- unknown candidate ID errors clearly;
+- one legal result;
+- more than five legal results;
+- mixed scores;
+- score ties;
+- identical sentence+score different source records;
+- exact/middle/one-edit results;
+- original/path/offset preservation;
+- default `k=5`;
+- `k=0`;
+- negative `k` rejected.
 
----
-
-# 16. Ranking Tests
+## 14. Ranking Tests
 
 Explicitly test:
 
 ```text
 higher score first
-same score → alphabetical completed_sentence
-ranking independent of input order
-more than 5 then truncate after ranking
+same score → original completed_sentence Unicode lexicographic ascending
+same score+sentence → source_text ascending
+same score+sentence+source → offset ascending
+input order does not affect result
+truncate only after full ranking
 ```
 
-If identical completed sentences from different records require further tie-breaking, that remains a Team Decision Required case until the baseline defines it.
-
----
-
-# 17. CLI Behavior
-
-Implement interactive behavior required by the assignment.
-
-The system starts ready for input.
-
-After Enter:
-
-```text
-use current accumulated text
-show up to 5 suggestions
-allow continuation
-```
-
-When the user enters:
-
-```text
-#
-```
-
-reset:
-
-```python
-current_input = ""
-```
-
-Do not restart the entire application.
-
----
-
-# 18. CLI State
+## 15. CLI Semantics — Frozen
 
 Maintain:
 
@@ -539,31 +333,29 @@ Maintain:
 current_input
 ```
 
-The exact prompt wording is not architecturally important.
+Each CLI read is a **new fragment**, not the full accumulated string.
 
-Required semantics:
+Behavior:
 
 ```text
-fragment 1
-→ query accumulated text
-→ show suggestions
+fragment != "#"
+→ current_input += fragment exactly
+→ query current_input
+→ display suggestions
 
-fragment 2
-→ append/continue current sentence
-→ query updated accumulated text
-→ show suggestions
-
-#
-→ reset current sentence
+fragment == "#"
+→ current_input = ""
+→ return to initial prompt state
+→ do not run a search for "#"
 ```
 
-CLI tests should make the chosen input-append behavior explicit and deterministic.
+Do **not** automatically insert a space between fragments. If the user wants a space, the typed fragment includes one.
 
----
+EOF/interrupt should exit gracefully without corrupting state or printing a traceback in normal use.
 
-# 19. CLI Output
+## 16. CLI Output
 
-Each displayed suggestion must include:
+For each suggestion display:
 
 ```text
 completed sentence
@@ -572,230 +364,127 @@ offset
 score
 ```
 
-Always display the original corpus sentence.
+Output format wording is team-controlled, but information must be unambiguous and the completed sentence must be original corpus text.
 
-Do not expose normalized text as the completed sentence.
+## 17. Full Local Integration Test
 
----
-
-# 20. Startup / Snapshot Integration Test
-
-Use a small deterministic nested corpus.
-
-End-to-end flow:
+Use a deterministic small nested corpus:
 
 ```text
-C++ builder
- ↓
-Protobuf snapshot
- ↓
-LocalArtifactStore
- ↓
-Python snapshot loader
- ↓
-SearchIndex + records
- ↓
-SearchEngine
- ↓
-official API
- ↓
-results
+`autocomplete_builder --corpus ... --output ...`
+→ Protobuf snapshot
+→ Python load_snapshot
+→ SearchIndex + records
+→ SearchEngine
+→ configure_default_engine
+→ get_best_k_completions
 ```
 
 Verify:
 
 ```text
-correct sentences
-correct source paths
-correct line numbers
+correct completed sentences
+correct relative paths
+correct physical line numbers
 correct scores
 correct ranking
+Top 5 behavior
 ```
 
-A separate optional test may exercise:
+This is the primary cross-member Part A E2E gate.
 
-```text
-GCSArtifactStore
-→ local materialization
-→ same loaded result
-```
+## 18. Failure Quality
 
-Cloud-dependent tests should be isolated from the default local CI path unless credentials/test infrastructure are intentionally provided.
+Startup must clearly report and stop for:
 
----
+- snapshot path missing;
+- invalid/corrupt manifest;
+- missing snapshot data file;
+- unsupported version;
+- malformed framing/protobuf;
+- invalid posting references.
 
-# 21. Error / Failure Quality
+Do not configure the default engine unless the snapshot has fully loaded and validated.
 
-Startup should fail clearly for:
+Query-time code should remain network-free and should not reload the snapshot.
 
-```text
-missing snapshot
-corrupt manifest
-missing shard
-unsupported schema version
-unsupported normalization version
-invalid protobuf data
-GCS materialization failure
-```
+## 19. Differential Failure Report
 
-Do not serve queries with a partially initialized engine.
-
-The public query API should not perform cloud/network recovery logic.
-
----
-
-# 22. Edge Cases
-
-Explicitly test or mark Team Decision Required:
-
-```text
-empty query
-spaces-only query
-punctuation-only query
-very short query
-query longer than sentence
-empty corpus
-empty corpus line
-duplicate sentences
-same sentence in different files
-same score for several sentences
-query appears several times in one sentence
-typo near removed punctuation
-typo near normalized spaces
-edit at partition boundary
-```
-
-Do not create a branch-only policy for undefined assignment behavior.
-
----
-
-# 23. Quality Gate
-
-The system is not ready because:
-
-```text
-"It works on the demo."
-```
-
-Required:
-
-```text
-official regression tests pass
-Search Core unit tests pass
-C++/Python normalization parity passes
-snapshot round trip passes
-SearchIndex tests pass
-partition candidate-generation tests pass
-Reference Engine passes
-differential tests pass
-CLI tests pass
-integration tests pass
-local no-cloud execution works
-```
-
-Competition-ready additionally requires:
-
-```text
-benchmark evidence
-CI green
-documented architecture
-clear error handling
-team explainability
-```
-
----
-
-# 24. Benchmark Cooperation
-
-Member 2 owns most offline/index metrics.
-
-You should contribute online measurements for:
-
-```text
-end-to-end query latency
-candidate count per query
-candidate count by query-length bucket
-safe-fallback rate
-verification time
-ranking time
-```
-
-Do not benchmark GCS download time as if it were per-query latency.
-
-Online benchmark setup must use a fully materialized/loaded snapshot.
-
----
-
-# 25. Bug Report Template for Differential Failures
-
-Capture at least:
+Capture:
 
 ```text
 query
 normalized query
-partition split
-seed grams
-partition candidate IDs
+query length/split
+left/right seeds
+candidate IDs
 Reference output
 Optimized output
-candidate IDs
-missing/extra result
-source path
-line number
-random seed if generated
+missing/extra record
+source path/line
+random seed
 ```
 
-This should make it possible to route the bug quickly to:
+Route likely ownership:
 
 ```text
-Member 1 → matcher/scoring
-Member 2 → candidate/index/snapshot
-Member 3 → orchestration/ranking/metadata
+matcher/score mismatch → Member 1
+candidate/snapshot/index mismatch → Member 2
+ranking/orchestration/metadata/CLI → Member 3
 ```
 
----
+## 20. Online Benchmark Harness
 
-# 26. Definition of Done
+Member 3 owns a reproducible online benchmark harness after correctness.
 
-Ready for integration only when:
-
-- [ ] ranking is correct;
-- [ ] SearchEngine is correct;
-- [ ] official facade has the exact required signature;
-- [ ] Reference Engine works;
-- [ ] official examples pass;
-- [ ] differential tests pass;
-- [ ] partition-boundary differential tests pass;
-- [ ] optimized candidate recall is proven for generated one-edit cases;
-- [ ] optimized output equals reference output for tested query sets;
-- [ ] CLI continuation works;
-- [ ] `#` reset works;
-- [ ] startup from local snapshot works;
-- [ ] integration tests cover C++ snapshot → Python search;
-- [ ] original sentence/path/offset are preserved;
-- [ ] important edge cases are covered or explicitly Team Decision Required;
-- [ ] all owned tests pass;
-- [ ] frozen interfaces are unchanged;
-- [ ] no other teammate's implementation was silently modified.
-
----
-
-# 27. AI Coding Assistant Instruction
-
-Use:
+Measure at least:
 
 ```text
-00_TEAM_BASELINE.md
-+
-03_SEARCH_QUALITY_CLI_SPEC.md
+end-to-end query latency (at least median and p95; mean optional)
+candidate count
+candidate-generation latency
+matcher verification latency
+ranking latency
+query-length bucket statistics
+safe 1-char fallback frequency
+Reference-vs-Indexed speedup on the same query set
 ```
 
-Instruction:
+Rules:
 
-> Implement only Search Integration, Ranking, ReferenceEngine, the official API facade, CLI, and quality/integration tests.
-> Reuse Member 1 normalize() and match_and_score().
-> Reuse Member 2 SearchIndex and snapshot/artifact APIs.
-> Do not duplicate matching, scoring, normalization, corpus traversal, Protobuf serialization, or candidate-generation logic.
-> Keep GCS outside the query hot path.
-> If another branch is not ready, use mocks/fakes that follow the frozen interfaces.
-> If a shared contract appears insufficient, stop and explain the issue instead of changing it automatically.
+- snapshot is fully loaded before timing;
+- use a fixed corpus and fixed/reproducible query set;
+- report warm and/or cold conditions explicitly;
+- do not mix startup/build time with query latency;
+- keep correctness assertions enabled in benchmark validation runs.
+
+Member 2 supplies offline/index size/build/load metrics; final quality report combines both.
+
+## 21. Part B Readiness
+
+Do not implement Part B features in this branch during Part A.
+
+The Part A runtime boundary must make later feature modes possible without changing core semantics. A future semantic/generative/translation/speech mode may wrap SearchEngine or add a separate path, but must clearly distinguish its output from Part A matches/scores.
+
+## 22. Definition of Done
+
+- [ ] ranking is fully deterministic and requirement-compatible using the frozen original-string comparator;
+- [ ] SearchEngine flow uses only frozen dependencies;
+- [ ] normalized-empty query behavior correct;
+- [ ] legal negative scores are preserved through result conversion/ranking;
+- [ ] official facade exact and default engine initialization explicit;
+- [ ] ReferenceEngine works;
+- [ ] official E2E regressions pass;
+- [ ] differential output equality passes;
+- [ ] candidate recall assertions pass on generated sets;
+- [ ] CLI continuation/reset/EOF behavior passes;
+- [ ] local snapshot startup works;
+- [ ] C++→Python→public API integration passes;
+- [ ] original sentence/path/offset preserved;
+- [ ] benchmark harness exists and is reproducible;
+- [ ] Ruff/pytest/integration quality gates pass;
+- [ ] no other member's algorithm duplicated or silently changed.
+
+## 23. Codex Instruction
+
+> Implement only Search Integration/Reference/CLI/Quality v2.1. Reuse Member 1 `normalize()` and `match_and_score()` and Member 2 `load_snapshot()`/`SearchIndex`. While Member 2 is unfinished, use fakes that satisfy the frozen interfaces; do not copy her gram/index logic. Keep Part A local and network-free. Do not modify shared contracts without team approval. Never create a new Git root/orphan history; work only on `feature/search-quality` created from PHASE0_COMMIT.

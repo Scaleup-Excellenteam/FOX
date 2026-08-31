@@ -1,0 +1,30 @@
+# Extracted corpus - generated locally from Archive.zip
+data/corpus/*
+!data/corpus/.gitkeep
+
+# Generated offline snapshots
+data/snapshots/*
+!data/snapshots/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# C++ / CMake
+build/
+cpp/build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+*.o
+*.obj
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

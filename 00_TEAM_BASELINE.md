@@ -1,90 +1,49 @@
-# 00_TEAM_BASELINE.md
+# Google Autocomplete Project — Team Architecture & Integration Baseline v2.1
 
-# Google Autocomplete Project — Team Architecture & Integration Baseline v1.1
-
-**Team size:** 3 developers
-**Project phase:** Part A — Functionality
-**Status:** Final pre-implementation technical baseline — freeze after team approval
-**Primary rule:** This file is the single source of truth for shared architecture, contracts, ownership boundaries, and integration behavior.
-
----
+**Team size:** 3 developers  
+**Scope:** Part A first; Part B only after Part A is complete and stable  
+**Status:** Final implementation baseline — freeze after all three teammates approve this exact version  
 
 ## 1. Purpose
 
-This document defines the shared technical baseline for the entire team.
+This file is the shared architectural and behavioral contract for the project. The role specs extend it:
 
-The three teammate-specific specs extend this file:
-
+- `PHASE0_SHARED_FOUNDATION_SPEC.md`
 - `01_SEARCH_CORE_SPEC.md`
 - `02_OFFLINE_INDEX_SNAPSHOT_SPEC.md`
 - `03_SEARCH_QUALITY_CLI_SPEC.md`
 
-If a teammate-specific spec conflicts with this file, **this file wins**.
-
-No teammate or AI coding assistant may silently rename, move, redesign, or change a frozen public contract.
-
----
+No teammate, branch, or AI coding assistant may silently change a frozen public contract.
 
 ## 2. Source-of-Truth Hierarchy
 
-We distinguish clearly between:
+When two documents disagree, use this order:
 
-### 2.1 Official Google Requirements
+1. **Official Part A assignment** (`google_project_2026_part_a...`) — mandatory behavior.
+2. **Official Part B assignment** for future Part B work only; it must not weaken Part A.
+3. **This baseline** — team architecture and explicit decisions for unspecified cases.
+4. **Role-specific SPEC**.
+5. **Implementation details**.
 
-These come from the assignment specification and are mandatory.
+A team decision must never be presented as an official Google requirement.
 
-### 2.2 Team Architecture Decisions
+## 3. Official Part A Requirements — Locked
 
-These are our engineering choices for implementing the assignment professionally.
+### 3.1 Two stages
 
-We must never present a team design choice as if Google explicitly required it.
+- **Offline:** read the corpus and prepare data for serving. The offline implementation may use any language.
+- **Online:** accept user text and return autocomplete results. The completion function must be implemented in Python.
 
-### 2.3 Team-Specific Implementation Details
+### 3.2 Corpus semantics
 
-These may evolve inside a branch only when they do not change shared contracts or behavior.
+- Corpus text is English and may contain punctuation.
+- Text files may occur at arbitrary depths in a directory tree.
+- **One physical source line = one sentence.** Never split a line on punctuation.
+- The original source line must be preserved for output.
 
----
+### 3.3 Required public result model
 
-# 3. Official Google Requirements — Locked
-
-## 3.1 Two-Stage System
-
-The program operates in two stages.
-
-### Offline
-
-The system reads the text sources from a known location and prepares data for serving.
-
-Google allows the initialization/offline part to be written in any language.
-
-### Online
-
-The system waits for user input and returns autocomplete suggestions.
-
-The completion function itself must be implemented in Python.
-
----
-
-## 3.2 Corpus Rules
-
-- Input text is in English.
-- Files may contain punctuation.
-- Text files may exist at arbitrary depths in a directory tree.
-- Every complete line in a source file is one sentence.
-
-Therefore:
-
-```text
-one source line = one sentence
-```
-
-Do not split a source line on `.`, `!`, `?`, or any other punctuation.
-
----
-
-## 3.3 Required Result Type
-
-The required result model is:
+The Google-facing model is kept as close as possible to the assignment:
 
 ```python
 from dataclasses import dataclass
@@ -98,638 +57,297 @@ class AutoCompleteData:
     score: int
 ```
 
-Each suggestion must contain:
+Team mapping:
 
-- the original completed sentence;
-- the source path;
-- the source offset / line;
-- the calculated score.
+- `completed_sentence` = original corpus line.
+- `source_text` = relative POSIX path of the source file.
+- `offset` = 1-based physical line number in that file.
+- `score` = official Part A score.
 
----
-
-## 3.4 Required Public Completion Function
-
-The external Google-facing API must exist **exactly** as:
+### 3.4 Required completion facade
 
 ```python
-def get_best_k_completions(
-    prefix: str,
-) -> list[AutoCompleteData]:
+from typing import List
+
+
+def get_best_k_completions(prefix: str) -> List[AutoCompleteData]:
     ...
 ```
 
-An internal search engine may support configurable `k`, but the required facade remains fixed to the official signature and returns up to five suggestions.
+It returns the best **up to five** results.
 
----
+Internal APIs may use modern built-in generics and configurable `k`; the external facade remains assignment-compatible.
 
-## 3.5 Matching Semantics
+### 3.5 Matching
 
-A normalized query is a valid match when:
+After normalization, a query matches a sentence when:
 
-1. it is an exact substring of the normalized sentence; or
-2. it can become a substring using at most one character edit.
+- it is an exact substring; or
+- it can become a substring with **at most one** character edit.
 
-A valid match may begin:
-
-- at the beginning;
-- in the middle;
-- at the end.
-
-This is **substring autocomplete**, not prefix-only autocomplete.
-
----
-
-## 3.6 Allowed Edit Cases
-
-At most one of the following is allowed:
+Allowed one-edit cases:
 
 - substitution;
 - one extra character in the query;
 - one missing character in the query.
 
-More than one edit is invalid.
+The match may begin at the beginning, middle, or end of a sentence. More than one edit is invalid.
 
-Team vocabulary:
-
-```text
-EXACT
-SUBSTITUTION
-EXTRA_IN_QUERY
-MISSING_IN_QUERY
-NO_MATCH
-```
-
-We use `EXTRA_IN_QUERY` and `MISSING_IN_QUERY` to avoid ambiguity about insertion/deletion direction.
-
----
-
-## 3.7 Required Normalization Behavior
-
-For matching and scoring:
-
-- case is ignored;
-- punctuation is removed;
-- repeated spaces between words collapse to one space;
-- spaces that remain after normalization count as characters.
-
-The original corpus sentence must be preserved separately for output.
-
----
-
-## 3.8 Required Scoring
-
-Formula:
+### 3.6 Scoring
 
 ```text
-Score = 2 × matching_characters - edit_penalty
+score = 2 * matching_characters - edit_penalty
 ```
 
-An incorrect, extra, or missing character earns no matching points.
+The edited/extra/missing character earns no matching points.
 
-Positions are **1-based** in the normalized query.
+Substitution penalty:
 
-### Substitution Penalty
-
-| Position | 1 | 2 | 3 | 4 | 5+ |
+| Query position | 1 | 2 | 3 | 4 | 5+ |
 |---|---:|---:|---:|---:|---:|
 | Penalty | 5 | 4 | 3 | 2 | 1 |
 
-### Extra / Missing Character Penalty
+Extra/missing penalty:
 
-| Position | 1 | 2 | 3 | 4 | 5+ |
+| Query position | 1 | 2 | 3 | 4 | 5+ |
 |---|---:|---:|---:|---:|---:|
 | Penalty | 10 | 8 | 6 | 4 | 2 |
 
-For a missing character, the position is the position where that character would be inserted.
+Positions are 1-based in the normalized query. For a missing character, use the insertion position; insertion at the end is position `len(query) + 1`.
 
-If several valid alignments exist inside the same sentence, the implementation must use the highest valid score for that sentence.
+If a sentence admits multiple legal alignments, use the **highest valid score for that sentence**.
 
----
+A legal match may have a negative score. **Never clamp scores to zero and never discard a legal match only because its score is negative.**
 
-## 3.9 Ranking
+### 3.7 Ranking
 
-Results are ordered by:
+Required keys:
 
 ```text
 1. score descending
-2. alphabetical completed_sentence for equal scores
+2. completed_sentence ascending
 ```
 
-The alphabetical rule above is our explicit technical interpretation of the assignment's tie-breaking requirement.
+The team freezes `completed_sentence ascending` as Python/Unicode lexicographic ordering of the **original output string**. This is our deterministic interpretation of the assignment's alphabetical tie-break; do not normalize, lowercase, or strip punctuation for ranking.
 
-Return the best **up to 5** results.
-
----
-
-## 3.10 Output Preservation
-
-Search operates on normalized text.
-
-Output uses:
+For deterministic behavior only when both required keys are identical, use:
 
 ```text
-original sentence
-original capitalization
-original punctuation
-source path
-source line
-score
+3. source_text ascending
+4. offset ascending
 ```
 
-Never return the normalized sentence as `completed_sentence`.
+Do not deduplicate different source records merely because their completed sentences are identical.
 
----
+### 3.8 Interactive behavior
 
-## 3.11 Interactive Behavior
+- Enter submits the accumulated query and shows up to five suggestions.
+- The user may continue typing from the current query.
+- A fragment equal to `#` resets the current query to empty without restarting the process.
 
-The online program must:
+## 4. Team Decisions for Previously Undefined Cases — Frozen v2.1
 
-1. wait for input;
-2. show suggestions after Enter;
-3. let the user continue the current sentence;
-4. reset the current sentence when `#` is entered.
+These are team decisions, not official requirements.
 
-The exact terminal UX may be implemented by Member 3, but it must preserve this behavior.
-
----
-
-## 3.12 Evaluation Priorities
-
-The two official evaluation dimensions are:
+### 4.1 Query normalizes to empty
 
 ```text
-Correctness
-+
-Efficiency
+"" / spaces-only / punctuation-only
+→ return []
 ```
 
-A fast but incorrect result fails.
+The index and matcher are not invoked for an empty normalized query.
 
-A correct solution should still move expensive work out of the online query path where possible.
+### 4.2 Corpus lines that normalize to empty
 
----
+Skip them from searchable records and the index. Preserve physical source line numbering for all retained records; skipped lines do not cause line-number renumbering.
 
-# 4. Team Architecture Decision — v1.1
+### 4.3 Corpus file eligibility
 
-Our production-oriented architecture is:
+Recursively process regular files whose extension is `.txt`, case-insensitively. Ignore non-regular files and non-`.txt` files.
+
+### 4.4 Encoding and line endings
+
+- Input files are decoded as UTF-8; an optional UTF-8 BOM is accepted.
+- Invalid UTF-8 is a clear offline build error naming the source path.
+- Both LF and CRLF are accepted as line terminators; line terminators are not part of the original sentence.
+
+### 4.5 Duplicate records
+
+Every retained source line is an independent record. The same text appearing in different files or line numbers remains independently eligible for the Top 5.
+
+### 4.6 Sentence IDs
+
+Searchable `sentence_id` values start at **1** and increase sequentially in deterministic corpus order.
 
 ```text
-                              OFFLINE
-                                 │
-                                 ▼
-                           Archive / Corpus
-                                 │
-                                 ▼
-                    C++ Recursive Corpus Loader
-                                 │
-                                 ▼
-                     C++ Canonical Normalization
-                                 │
-                                 ▼
-             C++ Character 1/2/3-Gram Inverted Index Builder
-                                 │
-                                 ▼
-                       Versioned Protobuf Snapshot
-                      /            |             \
-                     /             |              \
-             record shards    index shards      manifest
-                     \             |             /
-                      \            |            /
-                       └────────── snapshot ─────┘
-                                 │
-                      ┌──────────┴──────────┐
-                      │                     │
-                      ▼                     ▼
-               Local Artifact Store   Optional Google
-                                      Cloud Storage
-                                             │
-                           STARTUP / MATERIALIZATION
-                                             │
-                                      download once
-                                             │
-                                             ▼
-                                      local cache/disk
-                                             │
-                                             ▼
-                            Python Snapshot Loader
-                                             │
-                                             ▼
-                        records_by_id + SearchIndex
-                                             │
-                                            ONLINE
-                                             │
-                                             ▼
-                                         User Query
-                                             │
-                                             ▼
-                                Python Canonical Normalize
-                                             │
-                                             ▼
-                         Two-Part Recall-Safe Query Partition
-                                             │
-                                             ▼
-                      SearchIndex 1/2/3-Gram Candidate Lookup
-                                             │
-                                             ▼
-                              Exact One-Edit Match Verifier
-                                             │
-                                             ▼
-                                     Google Scoring
-                                             │
-                                             ▼
-                                         Ranking
-                                             │
-                                             ▼
-                                          Top 5
+sentence_id = 0
+→ reserved / invalid
 ```
 
-We call the online strategy:
+This avoids ambiguity with proto3 scalar default values and gives the loader a simple corruption check.
 
-> **Recall-Safe Candidate Generation → Exact Verification → Scoring → Ranking → Top-K**
+### 4.7 Character unit
 
-The index is an optimization only. It is never allowed to change the correct result.
+After UTF-8 decoding, matching positions, query length, partitioning, and 1/2/3-gram lengths are defined in **Unicode code points**, not UTF-8 bytes and not grapheme clusters.
 
-# 5. Why C++ Offline + Python Online
+Normalization only case-folds ASCII `A-Z`, deletes the frozen ASCII punctuation set, and collapses ASCII spaces; all other valid Unicode code points are preserved unchanged.
 
-This is a deliberate team design choice.
+The official corpus is English, so this rule mainly removes cross-language ambiguity. C++ and Python must still agree exactly if valid non-ASCII UTF-8 appears.
 
-### C++ Offline
+## 5. Canonical Normalization Contract
 
-Used for:
+Part A requires case-insensitive matching, punctuation removal, and repeated-space collapse. v2.1 freezes the exact cross-language interpretation:
 
-- recursive corpus ingestion;
-- deterministic corpus ordering;
-- normalization parity implementation;
-- 1/2/3-Gram inverted-index construction;
-- snapshot serialization;
-- heavy preprocessing.
-
-### Python Online
-
-Used for:
-
-- required completion API;
-- query normalization;
-- candidate retrieval from the loaded index;
-- exact matching;
-- scoring;
-- ranking;
-- reference engine;
-- CLI.
-
-The online completion path therefore satisfies the requirement that the completion function be written in Python.
-
----
-
-# 6. Protobuf Boundary
-
-Protocol Buffers are our **cross-language data contract** between C++ and Python.
-
-Important:
-
-> Protobuf is the serialization format, not a live RPC requirement.
-
-For v1.0 we intentionally do **not** require gRPC.
-
-The offline builder creates versioned `.binpb` snapshot artifacts. Python loads those artifacts before serving queries.
-
-This keeps the serving path simple and avoids requiring a live C++ process.
-
----
-
-# 7. Snapshot Design
-
-## 7.1 Shared Schema
-
-The repository will contain a shared frozen schema:
-
-```text
-proto/autocomplete_snapshot.proto
-```
-
-After the initial team-approved schema is committed, field-number or semantic changes require team approval.
-
-Both:
-
-```text
-C++ generated bindings
-Python generated bindings
-```
-
-must come from this same schema.
-
----
-
-## 7.2 Snapshot Layout
-
-Do not serialize the entire corpus/index as one huge protobuf message.
-
-Initial logical layout:
-
-```text
-snapshot/
-├── manifest.binpb
-├── records-00000.binpb
-├── records-00001.binpb
-├── ...
-├── index-00000.binpb
-├── index-00001.binpb
-└── ...
-```
-
-Exact shard sizes are an implementation/performance decision.
-
-A shard may contain multiple length-delimited protobuf messages or another clearly documented framed representation.
-
----
-
-## 7.3 Manifest Metadata
-
-The snapshot manifest must logically provide at least:
-
-```text
-schema_version
-snapshot_id
-normalization_version
-index_strategy_version
-gram_sizes
-corpus_digest
-created_at_utc
-record shard list
-index shard list
-```
-
-Recommended principle:
-
-```text
-same corpus + same schema + same normalization contract + same build options
-→ reproducible logical snapshot
-```
-
-`created_at_utc` may differ between builds, but content identity should be independently verifiable.
-
----
-
-## 7.4 Snapshot Validation
-
-Python must validate a snapshot before serving.
-
-At minimum:
-
-- supported schema version;
-- supported normalization version;
-- supported index strategy version;
-- supported gram sizes;
-- required shards are present;
-- records referenced by postings exist;
-- malformed/corrupt protobuf data fails clearly;
-- incompatible snapshots are rejected rather than silently loaded.
-
-Optional checksums/digests may be added and are encouraged.
-
-## 7.5 Snapshot Immutability & Corpus Update Policy
-
-Part A uses immutable/versioned snapshots.
-
-If any source file is added, removed, or changed:
-
-```text
-corpus change
-→ run a new offline build
-→ produce a new snapshot identity
-→ validate the new snapshot
-→ load the new snapshot at the next startup/materialization
-```
-
-Do not mutate an already-published snapshot in place.
-
-The currently running online engine may continue serving the previously validated snapshot until the new snapshot is ready. Hot swapping is optional and is not required for Part A.
-
-Incremental indexing/live index mutation is intentionally deferred until a benchmark or later requirement justifies the additional complexity around stable identities, deletions, consistency, and atomic publication.
-
----
-
-# 8. Storage Architecture
-
-## 8.1 Local Is the Default Runtime Path
-
-The project must run locally without Google Cloud credentials.
-
-A reviewer must be able to use a local snapshot.
-
----
-
-## 8.2 Google Cloud Storage Is Optional Durable Storage
-
-GCS may store:
-
-- source corpus archives;
-- immutable/versioned snapshot artifacts;
-- benchmark artifacts if useful.
-
-Recommended snapshot layout:
-
-```text
-gs://<bucket>/autocomplete/snapshots/<snapshot_id>/...
-```
-
----
-
-## 8.3 GCS Is Not in the Query Hot Path
-
-Forbidden design:
-
-```text
-every query
-→ Cloud Storage request
-→ retrieve index
-→ search
-```
-
-Required design:
-
-```text
-startup
-→ materialize snapshot locally
-→ validate
-→ load into local memory/data structures
-→ serve many queries without per-query GCS I/O
-```
-
-This preserves low online latency.
-
----
-
-## 8.4 Artifact Store Abstraction
-
-The storage layer should expose a stable abstraction, conceptually:
-
-```python
-class ArtifactStore:
-    def materialize_snapshot(
-        self,
-        snapshot_ref: str,
-        destination: Path,
-    ) -> Path:
-        ...
-```
-
-Implementations:
-
-```text
-LocalArtifactStore
-GCSArtifactStore
-```
-
-The exact class signature may be refined during repository Phase 0, but Local and GCS behavior must remain interchangeable at the search-engine boundary.
-
----
-
-# 9. Canonical Cross-Language Normalization Contract
-
-Normalization is a **behavioral contract**, not merely one language-specific function.
-
-Two implementations will exist:
-
-```text
-C++ offline normalization
-Python online normalization
-```
-
-They must produce identical normalized text.
-
----
-
-## 9.1 Canonical v1 Normalization Semantics
-
-Because the assignment corpus is English, v1 normalization is intentionally ASCII-defined.
-
-Apply these steps in order:
-
-1. convert ASCII `A-Z` to `a-z`;
-2. remove ASCII punctuation characters from this exact set:
+1. ASCII `A-Z` → `a-z`.
+2. Delete ASCII punctuation from exactly:
 
 ```text
 !"#$%&'()*+,-./:;<=>?@[\]^_`{|}~
 ```
 
-3. collapse runs of ASCII space (`U+0020`) to one ASCII space;
-4. trim leading and trailing ASCII spaces.
-
-Important distinction:
-
-```text
-punctuation is deleted
-```
-
-not replaced with a space.
+3. Collapse runs of ASCII space `U+0020` to one ASCII space.
+4. Trim leading and trailing ASCII spaces.
+5. Do not replace punctuation with spaces.
 
 Example:
 
 ```text
 Hello,       WORLD!!!
-→
-hello world
+→ hello world
 ```
 
-If the mentors provide a more specific punctuation/whitespace rule later, update this contract once for both languages.
+Python online normalization and C++ offline normalization must pass the same frozen golden vectors.
 
----
-
-## 9.2 Golden Cross-Language Test Vectors
-
-Shared frozen behavioral contract:
+## 6. Architecture v2.1
 
 ```text
-tests/contracts/normalization_cases.json
+OFFLINE
+Archive / corpus root
+        ↓
+C++ recursive .txt loader
+        ↓
+C++ canonical normalization
+        ↓
+Sentence records + character 1/2/3-gram postings
+        ↓
+Versioned Protobuf snapshot on local disk
+
+STARTUP
+Local snapshot directory
+        ↓
+Python snapshot loader + validation
+        ↓
+records_by_id + SearchIndex
+        ↓
+SearchEngine initialized once
+
+ONLINE QUERY
+User input
+        ↓
+Python canonical normalize
+        ↓
+empty? → []
+        ↓
+SearchIndex recall-safe candidate IDs
+        ↓
+exact one-edit verification + official score
+        ↓
+result conversion
+        ↓
+ranking
+        ↓
+Top 5
 ```
 
-The exact same cases must be run by:
+Core principle:
+
+> **Recall-safe candidate generation → exact verification → scoring → ranking → Top-K.**
+
+The index is an optimization only. It never decides MATCH/NO_MATCH and never calculates the final score.
+
+## 7. Why C++ Offline + Python Online
+
+This is a team architecture choice:
+
+- C++ handles recursive corpus ingestion, deterministic preprocessing, index construction, and snapshot writing.
+- Python handles the required completion API, runtime normalization, candidate retrieval, exact verification, scoring, ranking, reference validation, and CLI.
+
+There is no live C++ service and no gRPC requirement in Part A.
+
+## 8. Protobuf Boundary
+
+`proto/autocomplete_snapshot.proto` is the single cross-language snapshot schema.
+
+Protobuf is used for serialization, not for live transport.
+
+Part A snapshot layout starts simple:
 
 ```text
-C++ tests
-Python tests
+snapshot/
+├── manifest.binpb
+├── records.binpb
+└── index.binpb
 ```
 
-For every case:
+- `manifest.binpb` is one manifest message.
+- `records.binpb` contains multiple framed record messages.
+- `index.binpb` contains multiple framed posting messages.
+- Framing is fixed as: **4-byte unsigned big-endian payload length + protobuf payload bytes**.
+
+If benchmark evidence shows that a single records/index file is operationally inconvenient, the same framing may be split into numbered shards and listed in the manifest. Sharding is therefore supported by the format but **not mandatory for the first correct implementation**.
+
+### 8.1 Required manifest metadata
+
+At minimum:
 
 ```text
-normalize_cpp(input)
-==
-normalize_python(input)
-==
-expected
+schema_version = 1
+normalization_version = 1
+index_strategy_version = 1
+gram_sizes = [1, 2, 3]
+corpus_digest_sha256
+snapshot_id
+created_at_utc
+record file list
+index file list
+searchable_record_count
+posting_count
+index_digest_sha256
 ```
 
-No branch may invent a second normalization interpretation.
+### 8.2 Stable identity
 
----
+Do not compute stable identity from serialized protobuf bytes. Protobuf serialization is not canonical.
 
-# 10. Deterministic Corpus Identity
-
-## 10.1 Source Paths
-
-Store source paths as:
+`corpus_digest_sha256` is computed from the deterministic retained-record stream in ascending `sentence_id`, using an unambiguous canonical binary encoding of:
 
 ```text
-POSIX-style paths relative to the corpus root
+sentence_id
+source_path
+physical line_number
+original sentence
+normalized sentence
 ```
 
-Example:
+`index_digest_sha256` is computed independently from the deterministic logical posting stream sorted by gram size and gram value.
+
+`snapshot_id` is SHA-256 over a canonical configuration/content block containing:
 
 ```text
-books/classics/example.txt
+corpus_digest_sha256
+index_digest_sha256
+schema_version
+normalization_version
+index_strategy_version
+gram_sizes
 ```
 
-Do not store machine-specific absolute paths such as:
+`created_at_utc` is metadata and is excluded from identity. Exact byte-level digest encoding is frozen in `02_OFFLINE_INDEX_SNAPSHOT_SPEC.md`; never use serialized protobuf bytes as the stable identity.
 
-```text
-/home/user/project/Archive/books/example.txt
-C:\Users\...\Archive\books\example.txt
-```
+## 9. Shared Models
 
----
-
-## 10.2 File Traversal Order
-
-For deterministic builds:
-
-1. discover all eligible corpus files recursively;
-2. compute normalized relative POSIX paths;
-3. sort files lexicographically by relative path;
-4. process lines from 1 to N.
-
----
-
-## 10.3 Sentence IDs
-
-Assign sentence IDs deterministically in that traversal order.
-
-For the same corpus and same filtering rules:
-
-```text
-same source line
-→ same sentence_id
-```
-
-This supports:
-
-- reproducible debugging;
-- snapshot comparisons;
-- stable benchmarks;
-- repeatable index construction.
-
----
-
-# 11. Shared Python Models
-
-File:
-
-```text
-src/autocomplete/models.py
-```
-
-Created and frozen during repository Phase 0.
+File: `src/autocomplete/models.py`
 
 ```python
 from dataclasses import dataclass
@@ -744,7 +362,7 @@ class SentenceRecord:
     line_number: int
 
 
-@dataclass(frozen=True)
+@dataclass
 class AutoCompleteData:
     completed_sentence: str
     source_text: str
@@ -752,979 +370,345 @@ class AutoCompleteData:
     score: int
 ```
 
-Mapping:
+`SentenceRecord` is internal and immutable. `AutoCompleteData` follows the assignment's public shape.
 
-```text
-completed_sentence <- record.original
-source_text        <- record.source_path
-offset             <- record.line_number
-score              <- match_and_score(...)
-```
+## 10. Shared Python Contracts
 
-Team convention:
-
-```text
-offset = 1-based source line number
-```
-
----
-
-# 12. Shared Python Search Contracts
-
-## 12.1 Python Normalization
-
-Owned by Member 1:
+### Member 1
 
 ```python
 def normalize(text: str) -> str:
     ...
-```
 
-Must implement the canonical normalization contract exactly.
 
----
-
-## 12.2 Matching and Scoring
-
-Owned by Member 1:
-
-```python
-def match_and_score(
-    query: str,
-    sentence: str,
-) -> int | None:
+def match_and_score(query: str, sentence: str) -> int | None:
     ...
 ```
 
-Contract:
+Inputs to `match_and_score` are already normalized. An empty query is invalid at this internal boundary and raises `ValueError`; production SearchEngine callers return `[]` before calling it. The matcher alone is authoritative for true match and final sentence score.
 
-- both strings are already normalized;
-- exact substring is valid;
-- at most one edit is valid;
-- search all relevant substring alignments;
-- return highest valid score for the sentence;
-- return `None` for no valid match.
-
-Only this component decides true:
-
-```text
-MATCH / NO MATCH
-```
-
-The index must never make the final match decision.
-
----
-
-## 12.3 Loaded SearchIndex
-
-Owned by Member 2.
-
-Python runtime API:
+### Member 2
 
 ```python
 class SearchIndex:
-    def get_candidate_ids(
-        self,
-        normalized_query: str,
-    ) -> list[int]:
+    def get_candidate_ids(self, normalized_query: str) -> list[int]:
         ...
+
+
+def load_snapshot(snapshot_path: Path) -> tuple[dict[int, SentenceRecord], SearchIndex]:
+    ...
 ```
 
-Contract:
+`SearchIndex` may return false positives but must not omit a legal match.
 
-- query is already normalized;
-- returns unique sentence IDs only;
-- false positives are allowed;
-- false negatives are not allowed;
-- all official one-edit cases must be recall-safe;
-- candidate order is not part of the ranking contract;
-- deterministic ascending output is recommended for reproducible tests;
-- the final MATCH / NO MATCH decision belongs only to `match_and_score()`.
-
-Frozen v1.1 candidate-generation behavior:
-
-```text
-m = len(normalized_query)
-
-m == 1
-→ safe broad fallback to all eligible sentence IDs
-
-m >= 2
-→ split the query deterministically into two contiguous,
-  non-overlapping, near-balanced partitions
-→ generate exact-seed candidates for each partition
-→ UNION the two partition candidate sets
-```
-
-For an exact seed:
-
-```text
-seed length 1 → use the 1-gram posting list
-seed length 2 → use the 2-gram posting list
-seed length 3+ → intersect the posting lists of all overlapping 3-grams
-```
-
-Why this is recall-safe for at most one edit:
-
-```text
-query is split into 2 non-overlapping parts
-+ at most 1 edit is allowed
-→ at least one partition remains error-free in a legal alignment
-→ every legal match is reachable through at least one exact seed
-```
-
-For a query where the team cannot guarantee safe pruning, broaden the candidate set rather than risk a false negative.
-
-The runtime index must not:
-
-- calculate Google score;
-- decide true match;
-- rank;
-- return `AutoCompleteData`.
-
-## 12.4 Internal SearchEngine
-
-Owned by Member 3.
-
-Preferred internal API:
+### Member 3
 
 ```python
+def rank_results(results: list[AutoCompleteData]) -> list[AutoCompleteData]:
+    ...
+
+
 class SearchEngine:
-    def __init__(
-        self,
-        records_by_id: dict[int, SentenceRecord],
-        index: SearchIndex,
-    ):
-        ...
-
-    def search(
-        self,
-        prefix: str,
-        k: int = 5,
-    ) -> list[AutoCompleteData]:
+    def search(self, prefix: str, k: int = 5) -> list[AutoCompleteData]:
         ...
 ```
 
-Flow:
-
-```text
-prefix
-→ normalize()
-→ index.get_candidate_ids()
-→ record lookup
-→ match_and_score()
-→ AutoCompleteData
-→ rank_results()
-→ first k
-```
-
----
-
-## 12.5 Required Google Facade
-
-Owned by Member 3.
-
-External public API:
+Public API:
 
 ```python
-def get_best_k_completions(
-    prefix: str,
-) -> list[AutoCompleteData]:
+def configure_default_engine(engine: SearchEngine) -> None:
+    ...
+
+
+def get_best_k_completions(prefix: str) -> List[AutoCompleteData]:
     ...
 ```
 
-It delegates to the initialized default `SearchEngine` with `k=5`.
+Calling the facade before configuration raises a clear `EngineNotInitializedError`.
 
-Do not expose a different required signature in place of this facade.
+## 11. Frozen Candidate Index Strategy
 
----
-
-## 12.6 Ranking
-
-Owned by Member 3:
-
-```python
-def rank_results(
-    results: list[AutoCompleteData],
-) -> list[AutoCompleteData]:
-    ...
-```
-
-Rules:
+Initial production index:
 
 ```text
-1. score descending
-2. completed_sentence alphabetical
-```
-
-Reference and optimized engines must reuse this same ranking function.
-
----
-
-# 13. Reference Engine
-
-Owned by Member 3.
-
-Concept:
-
-```text
-prefix
-→ normalize()
-→ ALL SentenceRecords
-→ same match_and_score()
-→ same AutoCompleteData conversion
-→ same rank_results()
-→ Top K
-```
-
-Important terminology:
-
-> The Reference Engine is the **index/candidate-generation optimization oracle**.
-
-It proves that pruning/indexing did not change the result.
-
-It is **not** an independent proof that `match_and_score()` itself is correct, because both engines intentionally reuse the same matcher/scorer.
-
-Matcher/scoring correctness is validated by:
-
-- official Google examples;
-- independent unit tests;
-- golden scoring tests;
-- targeted edge cases.
-
----
-
-# 14. Candidate Generation Principle
-
-The index may produce:
-
-```text
-false positives
-```
-
-because the exact matcher filters them.
-
-The index must avoid:
-
-```text
-false negatives
-```
-
-because missing one legal candidate can change the final Top 5.
-
-Priority:
-
-```text
-candidate recall first
-candidate reduction second
-```
-
-When uncertain:
-
-```text
-broaden candidates
-```
-
-not:
-
-```text
-risk correctness
-```
-
-For v1.1, candidate generation is based on the classical partition/pigeonhole idea for edit distance: with at most one edit, splitting the query into two non-overlapping parts guarantees that at least one part is error-free in a legal alignment. The index searches for those exact seeds; `match_and_score()` still performs the authoritative verification.
-
-# 15. Frozen v1.1 Index Strategy
-
-Production candidate index:
-
-```text
-Character 1-Gram + 2-Gram + 3-Gram Inverted Index
-```
-
-Logical postings:
-
-```text
+character 1-gram + 2-gram + 3-gram inverted index
 (gram_size, gram) → sorted unique sentence IDs
 ```
 
-Examples:
+Normalized ASCII spaces participate in grams. Gram/query lengths and slicing use Unicode code points.
+
+For normalized query length `m`:
 
 ```text
-(1, "a")   → [1, 5, 8, ...]
-(2, "to")  → [2, 9, 20, ...]
-(3, "the") → [3, 7, 11, ...]
+m == 0 → [] before SearchIndex
+m == 1 → broad safe set of all searchable sentence IDs
+m >= 2 → split at m // 2 into left and right partitions
 ```
 
-Grams are built from the normalized sentence, including normalized ASCII spaces. Punctuation has already been removed by canonical normalization.
-
-### Why exactly 1/2/3 grams in v1.1
-
-- `1-gram` is required for recall-safe filtering of two- and three-character queries after two-part partitioning;
-- `2-gram` supports exact seeds of length two, especially queries of length 3–5;
-- `3-gram` provides stronger pruning for longer exact seeds;
-- longer seeds are represented safely by intersecting their overlapping 3-gram posting lists;
-- `4-gram`/`5-gram` indexes are not required for recall and would increase offline build cost, snapshot size, and runtime memory before benchmarks justify them.
-
-### Deterministic query partition
-
-For `m >= 2`:
+Exact seed lookup:
 
 ```text
-split_at = m // 2
-left  = query[:split_at]
-right = query[split_at:]
+seed length 1 → 1-gram posting
+seed length 2 → 2-gram posting
+seed length >= 3 → intersection of all overlapping 3-gram postings
 ```
 
-This gives:
+Final candidate set:
 
 ```text
-length 2 → 1 + 1
-length 3 → 1 + 2
-length 4 → 2 + 2
-length 5 → 2 + 3
-length 6 → 3 + 3
-length 7 → 3 + 4
-...
+candidates(left) UNION candidates(right)
 ```
 
-### Exact-seed lookup
+This is a recall-first optimization. Any future pruning/index strategy must pass differential tests against the reference engine before replacing it.
+
+4/5-gram indexes are not part of v2.1. They may be benchmarked later but are added only if measured latency/candidate reduction justifies their memory and snapshot cost.
+
+## 12. Reference Engine
+
+The Reference Engine scans all searchable records and uses the same:
 
 ```text
-len(seed) == 1
-→ posting(1, seed)
-
-len(seed) == 2
-→ posting(2, seed)
-
-len(seed) >= 3
-→ INTERSECTION of posting(3, every overlapping trigram in seed)
+normalize
+match_and_score
+result conversion
+rank_results
 ```
 
-Then:
+Only candidate sourcing differs:
 
 ```text
-candidate_ids
-=
-seed_candidates(left)
-UNION
-seed_candidates(right)
+Reference → all records
+Optimized → SearchIndex candidates
 ```
 
-For `m == 1`, candidate generation returns the broad safe set because one substitution can transform the typed character into any target character; a character-specific posting cannot safely guarantee recall.
+Therefore `Reference == Optimized` proves the index did not change results; it does **not** independently prove matcher/scoring correctness.
 
-No optimization is accepted until differential tests prove:
+## 13. Part B Extension Boundary
+
+Part A must remain fully usable and testable without Google Cloud credentials or external network services.
+
+Later Part B features must be added outside the Part A core. They may call the stable search engine, but must not silently change:
 
 ```text
-Reference == Indexed
+normalize()
+match_and_score()
+Part A scoring
+Part A ranking contract
+get_best_k_completions()
 ```
 
-for exact, substitution, extra-character, missing-character, short-query, partition-boundary, and generated query sets.
+Generated-model text must not be presented as a corpus match, and semantic similarity must not be presented as Part A score.
 
-# 16. Team Ownership
+No generic plugin framework is required in Part A. Create `features/` or `integrations/` only when a selected Part B feature requires them.
 
-## Member 1 — Search Core
+## 14. Team Ownership — Final v2.1
 
-Branch:
+### Member 1 — Search Core
+
+Branch: `feature/search-core`
+
+Owns:
 
 ```text
-feature/search-core
+Python canonical normalization
+exact/one-edit matcher
+scoring helpers and penalty tables
+core unit tests
+official scoring/matcher regression cases
 ```
 
-Owns primarily:
+### Member 2 — Offline Index & Snapshot
+
+Branch: `feature/offline-index-snapshot`
+
+Owns:
 
 ```text
-Python canonical normalization implementation
-exact substring matching
-one-edit matcher
-Google scoring
-normalization golden cases
-unit tests for core correctness
-```
-
----
-
-## Member 2 — Offline Index & Snapshot
-
-Branch:
-
-```text
-feature/offline-index-snapshot
-```
-
-Owns primarily:
-
-```text
-C++ recursive corpus loader
-C++ normalization parity implementation
-C++ 1/2/3-Gram inverted index builder
-recall-safe two-part candidate-generation algorithm
-deterministic sentence IDs
-Protobuf snapshot writer
-snapshot sharding
+C++ corpus loader
+C++ normalization parity
+SentenceRecord identity/order
+1/2/3-gram index builder
+.proto implementation support
+snapshot writer/framing/manifest
 Python snapshot loader
 Python SearchIndex
-LocalArtifactStore
-optional GCSArtifactStore
-performance benchmarks
+C++↔Python snapshot round-trip tests
+offline/index measurements
 ```
 
----
+**Removed from Part A:** GCS implementation and cloud credential handling.
 
-## Member 3 — Search Quality & CLI
+### Member 3 — Search Integration, Quality & CLI
 
-Branch:
+Branch: `feature/search-quality`
 
-```text
-feature/search-quality
-```
-
-Owns primarily:
+Owns:
 
 ```text
 ranking
 SearchEngine orchestration
-official Google facade
-Reference Engine
-differential testing
-official regression tests
+default-engine configuration + official facade
+ReferenceEngine
+differential/generated tests
 CLI
-integration tests
-end-to-end quality gates
+startup from a local snapshot
+integration/end-to-end tests
+online benchmark harness and quality report
 ```
 
----
+This rebalancing keeps Member 2 focused on the cross-language/index problem while Member 3 owns runtime integration and quality.
 
-# 17. Shared / Frozen Artifacts
-
-Created during Phase 0 and changed only by team agreement:
-
-```text
-00_TEAM_BASELINE.md
-src/autocomplete/models.py
-proto/autocomplete_snapshot.proto
-tests/contracts/normalization_cases.json
-```
-
-Public signatures in this file are also frozen.
-
-If an AI assistant believes a frozen contract is insufficient:
-
-```text
-STOP
-→ explain the issue
-→ propose a change
-→ do not change it automatically
-```
-
----
-
-# 18. Dependency Direction
+## 15. Dependency Direction
 
 Allowed:
 
 ```text
-C++ offline builder
-→ canonical normalization contract
-→ shared .proto schema
-
-Python snapshot loader
-→ generated Python protobuf bindings
-
-Python SearchEngine
-→ Member 1 normalize()
-→ Member 1 match_and_score()
-→ Member 2 SearchIndex
-→ Member 3 rank_results()
-
-Python ReferenceEngine
-→ Member 1 normalize()
-→ Member 1 match_and_score()
-→ Member 3 rank_results()
+C++ builder → shared normalization contract + shared .proto
+Python snapshot loader → generated protobuf bindings
+SearchEngine → normalize + SearchIndex + match_and_score + rank_results
+ReferenceEngine → normalize + match_and_score + rank_results
+CLI/main → load_snapshot + SearchEngine/API
 ```
 
 Forbidden:
 
 ```text
-matcher importing SearchEngine
-C++ builder calculating final online Top 5
-SearchIndex deciding MATCH / NO MATCH
-SearchIndex calculating Google score
-SearchEngine reading private index internals directly
-ReferenceEngine copying a second matcher
-per-query GCS reads for index data
+matcher → SearchIndex/SearchEngine
+SearchIndex → matcher/scoring/ranking
+C++ builder → final Top 5
+per-query snapshot reload
+Part A core → external cloud/LLM API
+ReferenceEngine → duplicate matcher implementation
 ```
 
----
-
-# 19. Suggested Repository Shape
+## 16. Repository Shape
 
 ```text
 google-autocomplete/
-│
 ├── cpp/
 │   ├── CMakeLists.txt
 │   ├── include/
 │   ├── src/
 │   └── tests/
-│
 ├── proto/
 │   └── autocomplete_snapshot.proto
-│
-├── src/
-│   └── autocomplete/
-│       ├── __init__.py
-│       ├── models.py
-│       ├── normalization.py
-│       ├── matcher.py
-│       ├── scoring.py
-│       ├── snapshot_loader.py
-│       ├── index.py
-│       ├── artifact_store.py
-│       ├── ranking.py
-│       ├── reference_engine.py
-│       ├── search_engine.py
-│       ├── api.py
-│       ├── cli.py
-│       └── main.py
-│
+├── src/autocomplete/
+│   ├── __init__.py
+│   ├── models.py
+│   ├── generated/
+│   │   ├── __init__.py
+│   │   └── autocomplete_snapshot_pb2.py
+│   ├── normalization.py
+│   ├── matcher.py
+│   ├── scoring.py
+│   ├── snapshot_loader.py
+│   ├── index.py
+│   ├── ranking.py
+│   ├── reference_engine.py
+│   ├── search_engine.py
+│   ├── api.py
+│   ├── cli.py
+│   └── main.py
 ├── tests/
-│   ├── contracts/
-│   │   └── normalization_cases.json
+│   ├── contracts/normalization_cases.json
 │   └── ...
-│
 ├── benchmarks/
-│
+├── scripts/
 ├── data/
-│   └── .gitkeep
-│
+│   ├── raw/
+│   └── snapshots/
 ├── 00_TEAM_BASELINE.md
+├── PHASE0_SHARED_FOUNDATION_SPEC.md
 ├── 01_SEARCH_CORE_SPEC.md
 ├── 02_OFFLINE_INDEX_SNAPSHOT_SPEC.md
 ├── 03_SEARCH_QUALITY_CLI_SPEC.md
-├── README.md
 ├── pyproject.toml
-├── .gitignore
-└── ...
+├── README.md
+└── .gitignore
 ```
 
-Exact toolchain files will be added during repository setup.
 
----
+## 17. Offline Builder Invocation Contract
 
-# 20. Quality Engineering Baseline
+Member 2 implements one documented C++ executable interface:
 
-The final project should be:
+```bash
+./build/cpp/autocomplete_builder \
+  --corpus <extracted-corpus-root> \
+  --output <snapshot-directory>
+```
+
+For the provided assignment archive, README documents extraction of `Archive.zip` to a directory before invoking the builder. Direct ZIP parsing is optional and is **not** required for Part A.
+
+On success the command produces a complete validated snapshot directory. On failure it exits non-zero and reports a clear error. The builder never partially publishes a snapshot as ready.
+
+## 18. Git / Integration Rules
+
+Phase 0 is completed and merged before feature branches begin.
+
+After the team approves the Phase 0 commit, record its hash as `PHASE0_COMMIT` and create every feature branch directly from that commit.
+
+Required checks:
+
+```bash
+git merge-base <feature-branch> <PHASE0_COMMIT>  # must resolve to PHASE0_COMMIT
+git status                                      # clean before integration
+```
+
+Forbidden:
 
 ```text
-Correct
-Fast
-Deterministic
-Reproducible
-Tested
-Explainable
-Portable
-Production-oriented
+git init inside the existing repository
+orphan/root feature branches
+--allow-unrelated-histories
+silent force-push of shared branches
+changing another member's frozen contract without approval
 ```
 
-Expected engineering support:
-
-- Python unit/integration tests;
-- C++ unit tests;
-- cross-language normalization contract tests;
-- official regression tests;
-- differential tests;
-- performance benchmarks;
-- CI for both languages;
-- lint/format checks;
-- clear configuration;
-- error handling;
-- useful logging around offline builds/startup;
-- architecture documentation.
-
-Exact Python/C++/Protobuf toolchain versions are pinned during repository setup so all three teammates and CI use compatible versions.
-
----
-
-# 21. What We Intentionally Do Not Add in v1.1
-
-Do not add technology merely to appear more complex.
-
-Unless a benchmark or new requirement justifies it, v1.0 does not require:
-
-```text
-gRPC
-microservices
-Kubernetes
-Redis
-SQL/NoSQL database
-load balancer
-per-query cloud calls
-incremental live index mutation
-```
-
-Production quality comes from disciplined architecture, reproducibility, correctness, observability, and performance — not the number of technologies.
-
----
-
-# 22. Required Testing Baseline
-
-## Normalization
-
-- case;
-- punctuation;
-- repeated spaces;
-- leading/trailing spaces under team convention;
-- C++ == Python golden vectors.
-
-## Matching
-
-- exact substring;
-- beginning/middle/end;
-- substitution;
-- extra query character;
-- missing query character;
-- 2+ edits rejected;
-- multiple possible alignments use best score.
-
-## Scoring
-
-- exact score;
-- all penalty positions;
-- spaces counted;
-- edited/missing/extra character gets no matching points.
-
-## Corpus / Snapshot
-
-- root-level file;
-- nested file;
-- deeply nested file;
-- deterministic path order;
-- deterministic IDs;
-- 1-based line number;
-- relative POSIX source path;
-- snapshot write/read round trip;
-- corrupt/incompatible snapshot failure.
-
-## Index
-
-- 1-character safe broad fallback;
-- 2-character query using 1+1 partition;
-- 3-character query using 1+2 partition;
-- 4-character query using 2+2 partition;
-- 5-character query using 2+3 partition;
-- longer balanced partitions;
-- 1/2/3-gram posting correctness;
-- sorted/unique postings;
-- posting intersection inside an exact seed;
-- union between the two query partitions;
-- exact query candidate recall;
-- substitution in either partition;
-- extra character in either partition;
-- missing character in either partition;
-- edit exactly at/near the partition boundary;
-- recall-safe broadening when required;
-- zero known false negatives.
-
-## Ranking / Search
-
-- descending score;
-- alphabetical tie;
-- Top 5;
-- original sentence preserved;
-- source path/offset correct.
-
-## Differential
-
-```python
-reference == optimized
-```
-
-for deterministic and generated queries.
-
-## CLI
-
-- initial query;
-- continuation;
-- repeated continuation;
-- `#` reset;
-- query after reset.
-
----
-
-# 23. Official Regression Examples
-
-Sentence:
-
-```text
-To be or not to be, that is the question.
-```
-
-Permanent expected behavior:
-
-| Query | Expected |
-|---|---:|
-| `To be` | 10 |
-| `or Not` | 12 |
-| `be, that` | 14 |
-| `2o be` | 3 |
-| `to pe` | 6 |
-| `or knot` | 8 |
-| `or nt` | 8 |
-| `not be` | NO MATCH |
-
-A change that breaks these is not acceptable.
-
----
-
-# 24. Performance Baseline
-
-After correctness is established, measure at least:
-
-```text
-corpus file count
-corpus sentence count
-offline build time
-snapshot serialized size
-snapshot load/startup time
-in-memory index size
-average candidate count
-candidate count by query-length bucket
-candidate reduction ratio
-posting-list size by gram order
-1/2/3-gram index size contribution
-safe-fallback rate
-candidate-generation latency
-matcher verification latency
-end-to-end query latency
-```
-
-Performance comparisons must use the same corpus and query set.
-
----
-
-# 25. Team-Decision-Required Cases
-
-Do not let one branch silently invent behavior for:
-
-```text
-empty query
-spaces-only query
-punctuation-only query
-empty corpus line
-unsupported/invalid text encoding
-duplicate identical output records
-identical completed_sentence from different source/offset pairs
-```
-
-If one becomes relevant:
-
-```text
-TEAM DECISION REQUIRED
-→ agree once
-→ update this baseline
-→ add tests
-```
-
----
-
-# 26. Merge / Integration Policy
-
-Recommended branch integration order:
-
-```text
-1. shared Phase 0 baseline/skeleton
-2. feature/search-core
-3. feature/offline-index-snapshot
-4. feature/search-quality
-5. integration-only fixes
-```
-
-Before merging a branch:
-
-- branch unit tests pass;
-- frozen interfaces are unchanged;
-- no other teammate's owned implementation is silently modified;
-- shared contract changes, if any, were approved first;
-- formatter/linter/static checks pass;
-- relevant cross-language/differential checks pass when dependencies are available.
-
----
-
-# 27. Development Phases
-
-## Phase 0 — Shared Foundation
-
-```text
-repository skeleton
-toolchain pinning
-models.py
-.proto schema draft + team approval
-index_strategy_version + gram_sizes metadata
-normalization_cases.json
-CI skeleton
-shared interfaces
-```
-
-## Phase 1 — Search Correctness Core
-
-```text
-Python normalization
-matcher
-scoring
-official regression tests
-```
-
-## Phase 2 — Offline Builder & Snapshot
-
-```text
-C++ corpus loader
-C++ normalization parity
-1/2/3-Gram inverted index builder
-sorted unique posting lists
-Protobuf snapshot writer
-Python snapshot loader
-```
-
-## Phase 3 — Runtime Index & Search Integration
-
-```text
-SearchIndex
-two-part query partitioning
-exact-seed posting lookup
-candidate union
-SearchEngine
-ranking
-official facade
-```
-
-## Phase 4 — Reference & Differential Validation
-
-```text
-ReferenceEngine
-generated query tests
-Reference == Indexed
-```
-
-## Phase 5 — CLI
-
-```text
-interactive continuation
-#
-reset
-```
-
-## Phase 6 — Storage Integration
-
-```text
-LocalArtifactStore
-optional GCSArtifactStore
-startup materialization
-```
-
-## Phase 7 — Benchmark & Optimize
-
-```text
-measure
-profile
-optimize safely
-re-run differential tests
-```
-
-## Phase 8 — Final Production Review
-
-```text
-full tests
-CI green
-benchmark report
-documentation
-architecture explanation
-failure handling review
-```
-
----
-
-# 28. Team-Level Definition of Done
-
-Functionally ready only when:
-
-- [ ] corpus traversal is correct;
-- [ ] deterministic IDs are correct;
-- [ ] C++ and Python normalization are identical;
-- [ ] Protobuf snapshot round trip works;
-- [ ] snapshot validates schema, normalization, and index-strategy compatibility;
-- [ ] 1/2/3-gram postings are deterministic, sorted, and unique;
-- [ ] two-part candidate generation is recall-safe for all one-edit cases;
-- [ ] exact substring works;
-- [ ] all one-edit cases work;
-- [ ] 2+ edits are rejected;
-- [ ] scoring is correct;
-- [ ] ranking is correct;
-- [ ] Top 5 is correct;
-- [ ] original text/path/offset are correct;
-- [ ] official examples pass;
-- [ ] Reference Engine works;
-- [ ] Indexed Engine matches Reference Engine;
-- [ ] CLI continuation and reset work;
-- [ ] local execution works without cloud credentials.
-
-Competition-ready only when additionally:
-
-- [ ] benchmark suite exists;
-- [ ] one-edit candidate recall is proven by differential tests;
-- [ ] candidate pruning materially reduces work on realistic data;
-- [ ] no optimization changes correct results;
-- [ ] startup/snapshot costs are measured;
-- [ ] optional GCS flow works;
-- [ ] CI is green;
-- [ ] all team members can explain architecture, matching, scoring, indexing, Protobuf boundary, and trade-offs.
-
----
-
-# 29. Core Engineering Principle
+Before integration, branch tests/lint/format must pass. Integration fixes belong to the owner of the broken contract unless the team explicitly agrees otherwise.
+
+Each checkout/worktree uses its own repository-local `.venv`; do not reuse one editable-install virtual environment across worktrees.
+
+## 19. Quality Gates
+
+Functionally ready:
+
+- official examples pass;
+- normalization parity passes C++ and Python;
+- exact and all one-edit cases pass;
+- 2+ edits are rejected;
+- snapshot write/load validates versions and references;
+- candidate generation has no known false negatives;
+- Reference and Indexed engines agree on deterministic/generated sets;
+- ranking and Top 5 are deterministic;
+- original sentence/path/offset are preserved;
+- CLI continuation/reset works;
+- local startup works without network/cloud credentials.
+
+Competition-ready additionally:
+
+- CI green;
+- benchmark report on one fixed corpus/query set;
+- candidate reduction and end-to-end latency measured;
+- startup/snapshot costs measured;
+- no optimization accepted without differential regression;
+- README explains architecture, run steps, failure behavior, and trade-offs;
+- all three teammates can explain the core algorithms and boundaries.
+
+## 20. Engineering Principle
 
 ```text
 Correctness first.
-Cross-language contract second.
-Safe indexing third.
-Optimization fourth.
+Shared contracts second.
+Recall-safe indexing third.
+Measured optimization fourth.
+Part B value after Part A is stable.
 ```
 
-Every optimization must answer:
+## 21. Technical References
 
-> Did we make the system faster without changing the correct result?
-
-If that is not proven, the optimization is not ready.
-
----
-
-# 30. Technical References
-
-## 30.1 Official Vendor Documentation
-
-Protocol Buffers overview:
-https://protobuf.dev/overview/
-
-Protocol Buffers techniques / large datasets / framing:
-https://protobuf.dev/programming-guides/techniques/
-
-Protocol Buffers reference guides:
-https://protobuf.dev/reference/
-
-Google Cloud Storage overview:
-https://cloud.google.com/storage/docs/introduction
-
-Google Cloud Storage consistency:
-https://cloud.google.com/storage/docs/consistency
-
-## 30.2 Algorithmic Rationale
-
-Algorithmic references supporting the team-design choice (not official assignment requirements):
-
-Approximate matching / pigeonhole principle lecture notes, Johns Hopkins University:
-https://www.cs.jhu.edu/~langmea/resources/lecture_notes/06_approximate_matching_v2.pdf
-
-Dynamic partitioning of search patterns for approximate pattern matching (open-access research article):
-https://pmc.ncbi.nlm.nih.gov/articles/PMC8246400/
-
-Approximate string-matching with q-grams and maximal matches:
-https://doi.org/10.1016/0304-3975(92)90143-4
+- Protocol Buffers overview: https://protobuf.dev/overview/
+- Protocol Buffers techniques / streaming multiple messages / large data sets: https://protobuf.dev/programming-guides/techniques/
+- Protobuf serialization is not canonical: https://protobuf.dev/programming-guides/serialization-not-canonical/
+- Approximate matching / pigeonhole principle lecture notes: https://www.cs.jhu.edu/~langmea/resources/lecture_notes/06_approximate_matching_v2.pdf
+- Dynamic partitioning for approximate pattern matching: https://pmc.ncbi.nlm.nih.gov/articles/PMC8246400/

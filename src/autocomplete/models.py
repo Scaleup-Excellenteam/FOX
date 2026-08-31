@@ -10,7 +10,7 @@ class SentenceRecord:
     line_number: int
 
 
-@dataclass(frozen=True)
+@dataclass
 class AutoCompleteData:
     completed_sentence: str
     source_text: str

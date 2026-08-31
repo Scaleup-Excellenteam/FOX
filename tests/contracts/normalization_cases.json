@@ -1,47 +1,15 @@
 [
-  {
-    "name": "mixed_case",
-    "input": "GoOgLe AutoComplete",
-    "expected": "google autocomplete"
-  },
-  {
-    "name": "punctuation",
-    "input": "Hello, world!",
-    "expected": "hello world"
-  },
-  {
-    "name": "multiple_punctuation_characters",
-    "input": "Wait... what?!",
-    "expected": "wait what"
-  },
-  {
-    "name": "punctuation_adjacent_to_words",
-    "input": "rock-and-roll",
-    "expected": "rockandroll"
-  },
-  {
-    "name": "repeated_spaces",
-    "input": "one     two   three",
-    "expected": "one two three"
-  },
-  {
-    "name": "leading_and_trailing_spaces",
-    "input": "   padded text   ",
-    "expected": "padded text"
-  },
-  {
-    "name": "punctuation_and_spaces",
-    "input": "  Hello,       WORLD!!!  ",
-    "expected": "hello world"
-  },
-  {
-    "name": "empty_string",
-    "input": "",
-    "expected": ""
-  },
-  {
-    "name": "punctuation_only_input",
-    "input": "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
-    "expected": ""
-  }
+  {"input": "Hello,       WORLD!!!", "expected": "hello world"},
+  {"input": "MiXeD AsCiI CaSe", "expected": "mixed ascii case"},
+  {"input": "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", "expected": ""},
+  {"input": "alpha,beta.gamma", "expected": "alphabetagamma"},
+  {"input": "can't-stop", "expected": "cantstop"},
+  {"input": "one     two   three", "expected": "one two three"},
+  {"input": "  Leading and trailing  ", "expected": "leading and trailing"},
+  {"input": "  Hello,   WORLD!!!  ", "expected": "hello world"},
+  {"input": "word--word", "expected": "wordword"},
+  {"input": "", "expected": ""},
+  {"input": "     ", "expected": ""},
+  {"input": "!!!", "expected": ""},
+  {"input": "Café 世界", "expected": "café 世界"}
 ]

@@ -1,18 +1,10 @@
-# 02_OFFLINE_INDEX_SNAPSHOT_SPEC.md
-
-# SPEC 2 — Offline Index, Protobuf Snapshot & Performance
+# SPEC 2 — Offline Index, Protobuf Snapshot & Runtime SearchIndex v2.1
 
 ## Role
 
-**C++ Offline Builder, Cross-Language Snapshot, Python Runtime Index & Storage**
+**C++ Offline Builder, Cross-Language Snapshot, Python Snapshot Loader & Recall-Safe Runtime Index**
 
-**Architecture baseline:** v1.1
-
-Use this file together with `00_TEAM_BASELINE.md`.
-
-If anything conflicts, `00_TEAM_BASELINE.md` wins.
-
----
+Use with `00_TEAM_BASELINE.md` and `PHASE0_SHARED_FOUNDATION_SPEC.md`.
 
 ## 1. Branch
 
@@ -20,162 +12,81 @@ If anything conflicts, `00_TEAM_BASELINE.md` wins.
 feature/offline-index-snapshot
 ```
 
----
+It must start from the frozen `PHASE0_COMMIT`.
 
-## 2. Primary Responsibility
+## 2. Ownership
 
-You own:
-
-```text
-C++ recursive corpus loading
-deterministic corpus traversal
-C++ canonical normalization parity
-deterministic SentenceRecord IDs
-C++ Character 1/2/3-Gram inverted-index construction
-Protobuf snapshot writing
-snapshot sharding
-snapshot validation metadata
-Python snapshot loading
-Python SearchIndex candidate retrieval
-LocalArtifactStore
-optional GCSArtifactStore
-offline/startup/index performance benchmarks
-```
-
-You do **not** own:
-
-```text
-Python canonical normalization semantics
-exact matcher
-Google scoring
-ranking
-SearchEngine orchestration
-Reference Engine
-official Google facade
-CLI behavior
-```
-
----
-
-## 3. Files You Primarily Own
-
-Suggested C++ area:
+You own primarily:
 
 ```text
 cpp/include/...
 cpp/src/...
 cpp/tests/...
 cpp/CMakeLists.txt
-```
 
-Suggested Python runtime area:
-
-```text
 src/autocomplete/snapshot_loader.py
 src/autocomplete/index.py
-src/autocomplete/artifact_store.py
 
 tests/test_snapshot_loader.py
 tests/test_index.py
-tests/test_artifact_store.py
-benchmarks/
+cross-language snapshot fixtures/tests
+offline/index benchmark measurements
 ```
 
-Shared schema:
+You are the main implementer consuming the frozen `.proto`, but you may not silently change the frozen schema.
 
-```text
-proto/autocomplete_snapshot.proto
+You do not own Python matcher/scoring, ranking, SearchEngine, ReferenceEngine, official API facade, CLI, or Part B cloud services.
+
+## 3. C++ Corpus Loader
+
+Input: a corpus root directory.
+
+Required behavior:
+
+1. recursively discover regular `.txt` files, extension case-insensitive;
+2. convert each path to a relative POSIX-style path;
+3. sort those paths lexicographically;
+4. decode each file as UTF-8, accepting optional UTF-8 BOM;
+5. accept LF/CRLF line endings;
+6. process physical lines in order with 1-based line numbers;
+7. preserve the exact decoded source line excluding line terminator/BOM; a UTF-8 BOM is an encoding marker, not sentence content;
+8. normalize with the frozen C++ normalization implementation;
+9. skip lines whose normalized text is empty;
+10. assign deterministic sequential `sentence_id` values only to retained searchable records, starting at `1`; `0` is reserved/invalid.
+
+Invalid UTF-8 is a build error that names the source path.
+
+Frozen builder invocation:
+
+```bash
+./build/cpp/autocomplete_builder \
+  --corpus <extracted-corpus-root> \
+  --output <snapshot-directory>
 ```
 
-You will be the primary implementation contributor to the schema, but after the initial team-approved version is frozen, semantic/field-number changes require all-team approval.
+The provided `Archive.zip` is extracted before the builder is invoked. Direct ZIP parsing is optional and not required for Part A. The builder writes to a temporary/incomplete location and only makes the output snapshot available as complete after all files and the manifest are successfully written.
 
-Shared normalization contract:
+## 4. C++ Normalization Parity
 
-```text
-tests/contracts/normalization_cases.json
-```
+Implement the exact Phase 0 normalization semantics in C++ without locale-dependent lowercasing.
 
-You consume it; Member 1 leads its behavioral semantics.
-
----
-
-# 4. C++ Recursive Corpus Loader
-
-The offline builder receives a corpus root.
-
-Requirements:
-
-- recursively discover eligible text files;
-- files may be deeply nested;
-- each complete line is one sentence;
-- never split a source line on punctuation;
-- preserve exact original line text;
-- preserve 1-based source line number;
-- convert source paths to relative POSIX-style paths;
-- normalize using the exact shared v1 normalization contract;
-- assign deterministic sentence IDs.
-
----
-
-# 5. Deterministic Traversal
-
-Required deterministic build order:
-
-```text
-discover files recursively
-→ convert to relative POSIX paths
-→ lexicographically sort paths
-→ process files in sorted order
-→ process each file line 1..N
-→ assign sequential sentence IDs
-```
-
-For identical corpus content and filtering rules:
-
-```text
-same source line
-→ same sentence_id
-```
-
-Do not depend on filesystem enumeration order.
-
----
-
-# 6. C++ Normalization Parity
-
-Implement the same canonical semantics defined in `00_TEAM_BASELINE.md`.
-
-Do not invent a C++-specific normalization rule.
-
-Run the shared golden contract:
-
-```text
-tests/contracts/normalization_cases.json
-```
+The same `tests/contracts/normalization_cases.json` must be consumed by C++ tests.
 
 Required invariant:
 
 ```text
-normalize_cpp(input)
-==
-expected
+normalize_cpp(input) == expected
 ```
 
-Member 1's Python tests independently verify:
+Together with Member 1's tests:
 
 ```text
-normalize_python(input)
-==
-expected
+normalize_cpp(input) == normalize_python(input)
 ```
 
-Together they prove cross-language parity.
+## 5. Offline Record
 
----
-
-# 7. Offline Sentence Representation
-
-The C++ builder should logically maintain:
+Each retained record logically contains:
 
 ```text
 sentence_id
@@ -185,730 +96,399 @@ source_path
 line_number
 ```
 
-This data is serialized into the shared Protobuf snapshot so Python can reconstruct the frozen `SentenceRecord` model.
+The snapshot must allow Python to reconstruct `SentenceRecord` exactly.
 
----
+## 6. Character 1/2/3-Gram Inverted Index
 
-# 8. Character 1/2/3-Gram Inverted Index
-
-Frozen v1.1 strategy:
-
-```text
-Character 1-Gram + 2-Gram + 3-Gram Inverted Index
-```
-
-Logical concept:
+Frozen v2.1 initial strategy:
 
 ```text
 (gram_size, gram) → sorted unique sentence IDs
 ```
 
-Build grams from every eligible normalized sentence.
+Build `gram_size` 1, 2, and 3 from normalized sentences.
 
-Requirements:
+Rules:
 
-- include normalized ASCII spaces as characters;
-- punctuation has already been removed by canonical normalization;
-- do not add the same `sentence_id` twice to the same posting list even if a gram repeats in one sentence;
-- sort posting lists by ascending `sentence_id` before snapshot serialization;
-- produce deterministic postings for the same corpus/build configuration.
+- after UTF-8 decoding, gram length/slicing uses Unicode code points, not UTF-8 bytes;
+- `GramPostingProto.gram` stores the resulting gram as UTF-8 text;
+- normalized ASCII spaces are characters and participate in grams;
+- punctuation is already removed;
+- a repeated gram in one sentence contributes that sentence ID only once to that posting;
+- posting IDs are sorted ascending before serialization;
+- index output is deterministic for the same logical corpus/configuration.
 
-Why v1.1 stores 1/2/3 grams:
+## 7. Runtime Candidate Algorithm
 
-- 1-grams support recall-safe exact seeds of length one for short queries;
-- 2-grams support exact seeds of length two;
-- 3-grams provide stronger pruning for longer seeds;
-- longer exact seeds are represented by intersecting all of their overlapping 3-gram posting lists;
-- 4/5-gram indexes are intentionally not stored in v1.1 because they are not necessary for recall and must be justified by benchmark evidence before increasing snapshot/runtime size.
+Python API:
 
-The index is a candidate-generation structure only. It does not decide whether a sentence actually matches the query.
-
-# 9. Most Important Index Rule — Recall First
-
-Candidate generation may return:
-
-```text
-false positives
+```python
+class SearchIndex:
+    def get_candidate_ids(self, normalized_query: str) -> list[int]:
+        ...
 ```
 
-because Member 1's exact matcher filters them.
+The production SearchEngine does not call it for an empty normalized query.
 
-Candidate generation must avoid:
-
-```text
-false negatives
-```
-
-because a missing legal candidate may change the Top 5.
-
-Priority:
+For `m = len(normalized_query)` in Unicode code points:
 
 ```text
-100% recall for legal matches
-before aggressive reduction
+m == 1 → all searchable sentence IDs
+m >= 2 → split_at = m // 2
+         left = query[:split_at]
+         right = query[split_at:]
 ```
 
-If a pruning rule cannot guarantee safety:
+Exact seed lookup:
 
 ```text
-fallback → broader candidate set
+len(seed) == 1 → 1-gram posting
+len(seed) == 2 → 2-gram posting
+len(seed) >= 3 → intersection of all overlapping 3-gram postings
 ```
 
-and when necessary:
+Final result:
 
 ```text
-fallback → all eligible sentence IDs
+seed_candidates(left) UNION seed_candidates(right)
 ```
 
-Correctness comes before index cleverness.
+Return unique IDs in ascending order for deterministic tests.
 
-## 9.1 Frozen v1.1 Candidate-Generation Algorithm
+### Correctness rule
 
-Input:
+False positives are acceptable. False negatives for legal Part A matches are not.
+
+The two-part design is based on the one-edit partition/pigeonhole observation: one edit can disrupt at most one of two non-overlapping query partitions in a legal alignment, leaving at least one exact seed. Exact verification still belongs only to Member 1's matcher.
+
+If a proposed pruning optimization cannot prove recall safety, broaden candidates rather than risk correctness.
+
+## 8. Why 1/2/3 Grams Only
+
+- 1-gram is needed for one-character seeds in short queries.
+- 2-gram directly represents two-character seeds.
+- 3-gram provides stronger filtering for longer seeds.
+- longer exact seeds are represented by intersecting all overlapping trigrams.
+- 4/5-gram indexes are not needed for recall and are added only after benchmark evidence shows net value.
+
+## 9. Protobuf Snapshot
+
+Use the frozen Phase 0 schema:
 
 ```text
-normalized_query
+SentenceRecordProto
+GramPostingProto
+SnapshotManifestProto
 ```
 
-Let:
+Do not create a parallel production JSON snapshot schema.
 
-```text
-m = len(normalized_query)
-```
-
-Behavior:
-
-```text
-m == 1
-→ return the broad safe candidate set
-
-m >= 2
-→ split query into two contiguous, non-overlapping,
-  near-balanced partitions
-```
-
-Deterministic split:
-
-```text
-split_at = m // 2
-left  = query[:split_at]
-right = query[split_at:]
-```
-
-Examples:
-
-```text
-2 chars → 1 + 1
-3 chars → 1 + 2
-4 chars → 2 + 2
-5 chars → 2 + 3
-6 chars → 3 + 3
-7 chars → 3 + 4
-```
-
-For each partition, compute exact-seed candidates:
-
-```text
-seed length 1
-→ 1-gram posting
-
-seed length 2
-→ 2-gram posting
-
-seed length >= 3
-→ all overlapping 3-grams
-→ INTERSECTION of their posting lists
-```
-
-Final candidate set:
-
-```text
-seed_candidates(left)
-UNION
-seed_candidates(right)
-```
-
-Return unique sentence IDs.
-
-## 9.2 Why the Partition Is Recall-Safe
-
-The assignment permits at most one edit.
-
-For a legal one-edit alignment, dividing the query into two non-overlapping partitions means that a single substitution/insertion/deletion can disrupt at most one partition; therefore at least one partition remains an exact seed in the target alignment. Searching both seeds and taking their union preserves that legal candidate.
-
-This is a filtering guarantee only. Sentence-level gram postings may still create false positives because all grams can occur in a sentence at different positions. That is acceptable: `match_and_score()` performs exact one-edit verification afterward.
-
-## 9.3 Short Query Policy
-
-```text
-length 1
-→ broad safe fallback
-```
-
-This case cannot be safely pruned by the typed character alone because one allowed substitution can turn that character into any target character.
-
-Queries of length 2 and 3 use the 1-gram index as part of the normal two-part strategy instead of falling back to the whole corpus.
-
-Empty/normalization-to-empty behavior remains governed by the shared Team-Decision-Required policy until explicitly frozen in `00_TEAM_BASELINE.md`.
-
-# 10. Protobuf Is the Cross-Language Contract
-
-Use:
-
-```text
-proto/autocomplete_snapshot.proto
-```
-
-Generate bindings for:
-
-```text
-C++
-Python
-```
-
-The C++ offline builder serializes.
-
-The Python runtime loader deserializes.
-
-Do not create a separate ad-hoc JSON schema for production snapshot data.
-
-JSON may still be used for human-readable tests/configuration where appropriate.
-
----
-
-# 11. Snapshot Contents
-
-The logical snapshot must contain enough information to reconstruct:
-
-```text
-all SentenceRecords
-all candidate index postings/data
-manifest metadata
-```
-
-Manifest must logically expose:
-
-```text
-schema_version
-snapshot_id
-normalization_version
-index_strategy_version
-gram_sizes
-corpus_digest
-created_at_utc
-record shard list
-index shard list
-```
-
-Exact protobuf field names/numbers are frozen after team review.
-
-Index snapshot data must preserve enough information to distinguish gram order, for example logically:
-
-```text
-gram_size
-gram bytes/text
-sorted repeated sentence IDs
-```
-
-The exact field names and field numbers are finalized in Phase 0 before generated C++/Python bindings are committed.
-
----
-
-# 12. Snapshot Sharding
-
-Do not place the entire corpus/index in one enormous protobuf message.
-
-Initial artifact layout:
+### Initial files
 
 ```text
 snapshot/
 ├── manifest.binpb
-├── records-00000.binpb
-├── records-00001.binpb
-├── ...
-├── index-00000.binpb
-├── index-00001.binpb
-└── ...
+├── records.binpb
+└── index.binpb
 ```
 
-Shard-size tuning is a benchmark decision.
+`manifest.binpb` = one protobuf message.
 
-If multiple protobuf messages share one shard file, use an explicit framed/length-delimited representation because raw protobuf wire messages are not self-delimiting.
-
-Document the framing format.
-
----
-
-# 13. Snapshot Identity & Reproducibility
-
-Define:
+Records/postings are framed:
 
 ```text
-schema_version
-normalization_version
-index_strategy_version
-gram_sizes
-corpus_digest
-snapshot_id
+4-byte unsigned big-endian payload length
++ protobuf payload
 ```
 
-so an identical corpus/configuration can be identified reliably.
+A malformed/truncated frame is a hard load error.
 
-Recommended principle:
+### Optional future sharding
+
+If file sizes/build/load benchmarks justify it, split the framed streams into numbered files and list them in the manifest. Do not implement sharding merely for appearance.
+
+## 10. Manifest Validation
+
+Required manifest values:
 
 ```text
+schema_version = 1
+normalization_version = 1
+index_strategy_version = 1
+gram_sizes exactly [1, 2, 3]
+corpus_digest_sha256
 snapshot_id
-=
-content/configuration identity
+created_at_utc
+record file list
+index file list
+searchable_record_count
+posting_count
+index_digest_sha256
 ```
 
-not merely a timestamp.
+Python loader rejects:
 
-`created_at_utc` is metadata and may vary.
+- unsupported version;
+- unexpected gram sizes;
+- missing listed file;
+- malformed manifest/message/frame;
+- duplicate sentence IDs;
+- posting referencing unknown sentence ID;
+- sentence ID `0`;
+- invalid gram size;
+- non-sorted/duplicate posting IDs if the writer contract is violated;
+- record/posting count mismatch;
+- corpus digest mismatch;
+- index digest mismatch.
 
-The exact content-digest algorithm must be deterministic and documented.
+Do not serve a partially loaded snapshot.
 
----
+## 11. Stable Corpus Digest, Index Digest and Snapshot ID
 
-# 14. Python Snapshot Loader
+Do **not** hash serialized protobuf bytes as the long-lived identity. Protobuf serialization is not canonical.
 
-Provide Python code that materializes runtime structures from a snapshot.
+### 11.1 Corpus digest
 
-Conceptual API:
+Build `corpus_digest_sha256` from the deterministic retained-record stream in ascending `sentence_id`.
+
+For every record, append these canonical bytes to SHA-256:
+
+```text
+u64_be(sentence_id)
+u64_be(len_utf8(source_path)) + UTF-8(source_path)
+u64_be(line_number)
+u64_be(len_utf8(original)) + UTF-8(original)
+u64_be(len_utf8(normalized)) + UTF-8(normalized)
+```
+
+`u64_be` means unsigned 64-bit big-endian. This removes delimiter ambiguity and is identical across C++ and Python.
+
+### 11.2 Index digest
+
+Build `index_digest_sha256` from postings sorted by:
+
+```text
+gram_size ascending
+then UTF-8 gram bytes lexicographically
+```
+
+For each posting, hash:
+
+```text
+u32_be(gram_size)
+u64_be(len_utf8(gram)) + UTF-8(gram)
+u64_be(number_of_sentence_ids)
+u64_be(sentence_id_1)
+u64_be(sentence_id_2)
+...
+```
+
+Posting sentence IDs are already sorted unique ascending.
+
+The Python loader recomputes both logical digests after parsing and rejects a mismatch.
+
+### 11.3 Snapshot identity
+
+Compute `snapshot_id` from this exact canonical UTF-8 block:
+
+```text
+corpus_digest_sha256=<hex>\n
+index_digest_sha256=<hex>\n
+schema_version=1\n
+normalization_version=1\n
+index_strategy_version=1\n
+gram_sizes=1,2,3\n
+```
+
+Hash the exact bytes with SHA-256 and store lowercase hexadecimal output.
+
+`created_at_utc` is excluded from identity. Including the logical index digest ensures two snapshots with different posting content cannot silently share the same snapshot identity.
+
+## 12. Python Snapshot Loader
+
+Frozen API:
 
 ```python
+from pathlib import Path
+
+
 def load_snapshot(
     snapshot_path: Path,
 ) -> tuple[dict[int, SentenceRecord], SearchIndex]:
     ...
 ```
 
-Exact return wrapper may be refined during Phase 0, but Member 3 must receive:
-
-```text
-records_by_id
-SearchIndex
-```
-
-without needing to understand protobuf shard internals.
-
 Responsibilities:
 
-- parse manifest;
-- validate schema, normalization, and index-strategy versions;
-- validate the expected gram sizes;
-- load all required record/index shards;
-- reject corrupt or incompatible snapshots clearly;
-- construct `SentenceRecord` objects;
-- construct runtime `SearchIndex`.
-
----
-
-# 15. Runtime SearchIndex API
-
-Implement:
-
-```python
-class SearchIndex:
-    def get_candidate_ids(
-        self,
-        normalized_query: str,
-    ) -> list[int]:
-        ...
-```
-
-Contract:
-
-- input is already normalized;
-- output contains unique sentence IDs only;
-- candidate order must not be relied on for final ranking;
-- deterministic ascending output is recommended for repeatable tests;
-- false positives are allowed;
-- false negatives are not allowed;
-- use the frozen two-part partition algorithm from Section 9;
-- use 1/2/3-gram postings according to exact-seed length;
-- one-character query uses the safe broad fallback;
-- final verification belongs only to `match_and_score()`.
-
-The index must not:
-
 ```text
-calculate score
-decide true match
-rank
-return AutoCompleteData
+read/validate manifest
+read framed record messages
+reconstruct SentenceRecord objects
+read framed posting messages
+validate postings/record references
+validate sentence_id > 0
+validate manifest record/posting counts
+recompute/validate corpus and index digests
+construct SearchIndex
+return records_by_id + SearchIndex
 ```
 
-# 16. Candidate Generation Placement
+Member 3 must not need protobuf/framing knowledge.
 
-For v1.0, candidate retrieval belongs behind:
-
-```python
-SearchIndex.get_candidate_ids(...)
-```
-
-Do not create an additional public `candidate_generator.py` abstraction unless complexity later proves it useful.
-
-This removes unnecessary duplication between:
-
-```text
-index
-candidate generator
-```
-
-The index may use private helper classes internally.
-
-
-## 16.1 Corpus Update / Rebuild Policy
+## 13. Snapshot Update Policy
 
 Part A snapshots are immutable.
 
-If a corpus file is added, removed, or changed:
+Corpus change:
 
 ```text
-run a new offline build
-→ create a new snapshot/version
-→ validate it
-→ load it for serving
-```
-
-Do not patch an already-published snapshot in place.
-
-Incremental indexing is explicitly a future optimization, not a Part A dependency. It may be considered later only if corpus-update frequency and benchmark evidence justify stable IDs, deletion handling, partial posting updates, and atomic publication complexity.
-
----
-
-# 17. Artifact Store
-
-The system must support local operation first.
-
-Conceptual storage interface:
-
-```python
-class ArtifactStore:
-    def materialize_snapshot(
-        self,
-        snapshot_ref: str,
-        destination: Path,
-    ) -> Path:
-        ...
-```
-
-Implementations:
-
-```text
-LocalArtifactStore
-GCSArtifactStore
-```
-
-Exact details may be refined during Phase 0 with Member 3, but storage is not allowed to leak into query matching/ranking code.
-
----
-
-# 18. Local Artifact Store
-
-Required for all environments.
-
-A reviewer without cloud credentials must be able to:
-
-```text
-build/load local snapshot
-→ start Python online engine
-→ run queries
-```
-
-Local mode is the baseline development and evaluation path.
-
----
-
-# 19. Optional Google Cloud Storage
-
-GCS is optional durable storage for versioned artifacts.
-
-Typical use:
-
-```text
-offline build
-→ upload snapshot
-→ gs://bucket/autocomplete/snapshots/<snapshot_id>/
-```
-
-Startup:
-
-```text
-GCSArtifactStore
-→ download/materialize snapshot to local cache
+rebuild completely
+→ create new snapshot identity
 → validate
-→ load
+→ use new snapshot at next startup
 ```
 
-Forbidden:
+No live mutation, incremental deletes, or hot swap is required in Part A.
+
+## 14. Local-Only Part A
+
+Part A has **no GCS implementation requirement** in v2.1.
+
+Snapshot input/output is local disk. This keeps the project runnable without credentials and keeps network I/O out of the query path.
+
+If the team later chooses GCS as a Part B feature or deployment enhancement, add a separate integration layer without modifying SearchIndex/matcher semantics.
+
+## 15. Required C++ Tests
+
+- root-level `.txt`;
+- nested/deeply nested `.txt`;
+- non-`.txt` ignored;
+- case-insensitive `.TXT` policy;
+- deterministic path sorting;
+- multiple physical lines;
+- 1-based line numbers;
+- LF and CRLF parity;
+- UTF-8 BOM handling;
+- invalid UTF-8 failure;
+- normalized-empty line skipped while line numbers remain physical;
+- deterministic sentence IDs starting at 1, with 0 never emitted;
+- Unicode code-point gram behavior on at least one valid non-ASCII UTF-8 fixture;
+- normalization golden vectors;
+- 1/2/3-gram postings;
+- repeated gram deduplicated per record;
+- sorted postings;
+- manifest creation;
+- framed record/posting writing;
+- stable corpus/index digests and snapshot ID for repeated logical builds.
+
+## 16. Required Python Tests
+
+### Loader
+
+- record reconstruction;
+- original/normalized/path/line/ID preservation;
+- valid manifest load;
+- missing file;
+- truncated frame;
+- corrupt protobuf;
+- unsupported schema/normalization/index version;
+- wrong gram sizes;
+- duplicate record ID;
+- record ID 0 rejected;
+- posting references missing record;
+- invalid posting order/duplicates;
+- record/posting count mismatch;
+- corpus digest mismatch;
+- index digest mismatch.
+
+### SearchIndex
+
+- 1-char broad fallback;
+- 2-char 1+1;
+- 3-char 1+2;
+- 4-char 2+2;
+- 5-char 2+3;
+- 6+ balanced partitions;
+- 3+-seed trigram intersection;
+- left/right union;
+- sorted unique results;
+- exact candidate recall;
+- substitution in either partition;
+- extra query character in either partition;
+- missing query character in either partition;
+- edit at/before/after split boundary;
+- no false negatives on deterministic generated legal queries.
+
+## 17. Cross-Language Round Trip
+
+Required integration fixture:
 
 ```text
-per-query GCS index reads
+small nested corpus
+→ C++ build
+→ snapshot
+→ Python load
 ```
 
-Online queries must operate on local/in-memory runtime data.
-
----
-
-# 20. Cloud Failure Behavior
-
-Cloud failures must fail clearly and early during materialization/startup.
-
-Examples:
+Validate:
 
 ```text
-missing credentials
-missing object
-permission denied
-incomplete snapshot
-network failure
-unsupported manifest
-```
-
-Do not start serving queries with a partially materialized snapshot.
-
-Local mode must remain usable independently of GCS.
-
----
-
-# 21. Required Tests — C++
-
-At minimum:
-
-```text
-root-level file
-nested file
-deeply nested file
-multiple files
-multiple lines
-relative POSIX source paths
-1-based line number
-deterministic file ordering
-deterministic sentence IDs
-normalization golden vectors
-1-gram posting correctness
-2-gram posting correctness
-3-gram posting correctness
-posting de-duplication per sentence
-sorted deterministic posting lists
-snapshot serialization
-manifest generation
-```
-
----
-
-# 22. Required Tests — Python Runtime
-
-At minimum:
-
-```text
-snapshot read round trip
-record reconstruction
-source path preservation
-line number preservation
-sentence ID preservation
-SearchIndex reconstruction
-manifest index-strategy validation
-1-character broad safe fallback
-2-character 1+1 partition
-3-character 1+2 partition
-4-character 2+2 partition
-5-character 2+3 partition
-long balanced partition
-posting intersection inside a seed
-union between partition candidate sets
-exact-query candidate recall
-substitution in left partition
-substitution in right partition
-extra character in left partition
-extra character in right partition
-missing character in left partition
-missing character in right partition
-edit at/near partition boundary
-no false negatives against known legal matches
-corrupt snapshot rejection
-unsupported schema rejection
-unsupported normalization version rejection
-unsupported index strategy rejection
-missing shard rejection
-```
-
-# 23. Cross-Language Round-Trip Test
-
-Required integration check:
-
-```text
-C++ builds snapshot
-        ↓
-Python loads snapshot
-        ↓
-Python records/index reflect expected corpus
-```
-
-Validate at least:
-
-```text
-record count
-selected original strings
-selected normalized strings
-source paths
-line numbers
+record count/content
+source paths/physical line numbers
 sentence IDs
-selected 1/2/3-gram postings
-selected partition/candidate behavior
+selected normalized values
+selected postings
+candidate behavior
+manifest versions/counts/corpus digest/index digest
 ```
 
----
+Member 3 owns the full SearchEngine E2E harness; Member 2 provides a stable builder/loader fixture.
 
-# 24. Performance Metrics
+## 18. Performance Responsibility
 
-Measure at least:
+Measure after correctness:
 
 ```text
-corpus file count
-corpus sentence count
+file count
+searchable record count
 offline build time
-snapshot serialized size
-record shard count
-index shard count
-Python snapshot load time
-runtime memory/index size
-1/2/3-gram index size contribution
-posting-list size distribution by gram order
-average candidate count
+records/index serialized size
+Python load time
+runtime posting/index memory estimate
+posting size distribution by gram size
 candidate count by query-length bucket
-candidate reduction ratio
-safe-fallback rate
 candidate-generation latency
+candidate reduction ratio
+1-char fallback rate
 ```
 
-If GCS is enabled, optionally report separately:
+Use one fixed corpus/query set for comparisons. Do not add an index structure merely because it seems theoretically faster.
 
-```text
-snapshot upload time
-snapshot download/materialization time
-```
+## 19. Definition of Done
 
-Do not mix cloud-transfer time with online query latency.
+- [ ] corpus traversal/I/O contract correct;
+- [ ] C++ normalization golden parity passes;
+- [ ] deterministic IDs/paths/line numbers correct; sentence IDs start at 1 and 0 is invalid;
+- [ ] 1/2/3 postings deterministic, sorted, unique, and use Unicode code-point gram boundaries;
+- [ ] candidate algorithm matches frozen partition strategy;
+- [ ] no known candidate false negatives;
+- [ ] Protobuf framing works cross-language;
+- [ ] builder command follows the frozen `--corpus/--output` invocation and publishes manifest last/only after successful data writing;
+- [ ] manifest counts, corpus digest, index digest, snapshot identity, and version validation work;
+- [ ] C++→Python round trip passes;
+- [ ] loader returns frozen API types;
+- [ ] local snapshot workflow works without cloud credentials;
+- [ ] offline/index metrics captured;
+- [ ] C++ and Python owned tests/lint/build pass;
+- [ ] shared `.proto` and contracts unchanged unless team-approved.
 
----
+## 20. Codex Instruction
 
-# 25. Differential Correctness Requirement
+> Implement only Offline Index/Snapshot v2.1. Use C++ for corpus preprocessing/index construction and the frozen Protobuf schema/framing for C++→Python snapshot data. Implement Python loader and SearchIndex only. Preserve candidate recall before candidate reduction. Do not implement matcher/scoring, ranking, SearchEngine, ReferenceEngine, CLI, GCS, or Part B features. Never create a new Git root/orphan history; work only on the assigned branch created from PHASE0_COMMIT.
 
-Member 3 owns the differential test harness.
+## 21. Technical References
 
-Your optimization is accepted only when:
-
-```text
-Reference Engine result
-==
-Indexed SearchEngine result
-```
-
-across:
-
-```text
-exact substrings
-beginning/middle/end
-substitution
-extra query character
-missing query character
-1-character queries
-2-character queries
-3/4/5-character queries
-long queries
-edits in either partition
-edits at/near partition boundary
-duplicates
-generated/random cases
-```
-
-When a differential test fails, first determine whether the valid record was absent from the candidate set.
-
----
-
-# 26. Definition of Done
-
-Ready for integration only when:
-
-- [ ] corpus traversal is recursive;
-- [ ] source paths are relative POSIX paths;
-- [ ] file order is deterministic;
-- [ ] sentence IDs are deterministic;
-- [ ] C++ normalization passes shared golden vectors;
-- [ ] 1/2/3-gram index builds successfully;
-- [ ] 1/2/3-gram postings are deterministic, sorted, and unique;
-- [ ] short-query behavior is safe, including 1-character broad fallback;
-- [ ] two-part candidate generation is implemented exactly as frozen;
-- [ ] no known candidate false negatives exist;
-- [ ] Protobuf schema is used for snapshot data;
-- [ ] snapshot is sharded/framed safely;
-- [ ] manifest/version metadata exists;
-- [ ] C++ → Python snapshot round trip works;
-- [ ] Python SearchIndex API is stable;
-- [ ] local snapshot flow works;
-- [ ] optional GCS flow, if enabled, works outside the query hot path;
-- [ ] benchmark report exists;
-- [ ] all owned tests pass;
-- [ ] frozen public interfaces are unchanged;
-- [ ] no other teammate's implementation was silently modified.
-
----
-
-# 27. AI Coding Assistant Instruction
-
-Use:
-
-```text
-00_TEAM_BASELINE.md
-+
-02_OFFLINE_INDEX_SNAPSHOT_SPEC.md
-```
-
-Instruction:
-
-> Implement only the Offline Index/Snapshot specification.
-> Use C++ for offline corpus/index construction and Protobuf for the C++→Python snapshot boundary.
-> Build the frozen 1/2/3-gram postings and implement the frozen two-part recall-safe candidate algorithm.
-> Implement the exact shared normalization semantics in C++ and validate them using the shared golden vectors.
-> Preserve candidate recall before optimizing reduction.
-> Keep Google Cloud Storage optional and outside the per-query hot path.
-> Do not implement Python matching, scoring, ranking, ReferenceEngine, SearchEngine orchestration, or CLI.
-> Do not change frozen interfaces or the shared .proto schema silently.
-> If a shared contract appears insufficient, stop and explain the issue instead of changing it automatically.
-
----
-
-# 28. Technical References
-
-## 28.1 Official Vendor Documentation
-
-Protocol Buffers overview:
-https://protobuf.dev/overview/
-
-Protocol Buffers techniques / large datasets / framing:
-https://protobuf.dev/programming-guides/techniques/
-
-Protocol Buffers reference guides:
-https://protobuf.dev/reference/
-
-Google Cloud Storage overview:
-https://cloud.google.com/storage/docs/introduction
-
-Google Cloud Storage consistency:
-https://cloud.google.com/storage/docs/consistency
-
-## 28.2 Algorithmic Rationale
-
-Algorithmic rationale references (team design, not official assignment requirements):
-
-Approximate matching / pigeonhole principle lecture notes, Johns Hopkins University:
-https://www.cs.jhu.edu/~langmea/resources/lecture_notes/06_approximate_matching_v2.pdf
-
-Dynamic partitioning of search patterns for approximate pattern matching:
-https://pmc.ncbi.nlm.nih.gov/articles/PMC8246400/
-
-Approximate string-matching with q-grams and maximal matches:
-https://doi.org/10.1016/0304-3975(92)90143-4
+- Protocol Buffers overview: https://protobuf.dev/overview/
+- Streaming multiple messages and large data sets: https://protobuf.dev/programming-guides/techniques/
+- Protobuf serialization is not canonical: https://protobuf.dev/programming-guides/serialization-not-canonical/
+- Approximate matching lecture notes: https://www.cs.jhu.edu/~langmea/resources/lecture_notes/06_approximate_matching_v2.pdf

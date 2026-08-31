@@ -1,19 +1,25 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "google-autocomplete"
 version = "0.1.0"
-description = "Cross-language Google Autocomplete implementation"
-requires-python = ">=3.11"
-dependencies = []
+description = "Shared foundation for the Google Autocomplete Part A project"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "protobuf==6.32.0",
+]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0,<9.0",
-    "ruff>=0.6,<1.0",
+    "pytest==8.4.2",
+    "ruff==0.16.5",
 ]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -22,9 +28,16 @@ where = ["src"]
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 88
-src = ["src", "tests"]
+extend-exclude = [
+    "00_TEAM_BASELINE.md",
+    "PHASE0_SHARED_FOUNDATION_SPEC.md",
+    "01_SEARCH_CORE_SPEC.md",
+    "02_OFFLINE_INDEX_SNAPSHOT_SPEC.md",
+    "03_SEARCH_QUALITY_CLI_SPEC.md",
+    "src/autocomplete/generated/autocomplete_snapshot_pb2.py",
+]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP"]
+select = ["E", "F", "I", "UP", "B"]

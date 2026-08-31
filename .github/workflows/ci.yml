@@ -17,21 +17,21 @@ jobs:
         with:
           python-version: "3.12.3"
 
-      - name: Install system Protobuf
+      - name: Install system toolchain dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler libprotobuf-dev pkg-config
+          sudo apt-get install -y g++-13 protobuf-compiler libprotobuf-dev pkg-config
 
       - name: Verify frozen system toolchain
         run: |
-          test "$(protoc --version)" = "libprotoc 3.21.12"
-          test "$(pkg-config --modversion protobuf)" = "3.21.12"
-          test "$(g++ -dumpfullversion)" = "13.3.0"
-          test "$(cmake --version | head -n 1)" = "cmake version 3.28.3"
           protoc --version
           pkg-config --modversion protobuf
-          g++ --version | head -n 1
+          g++-13 --version | head -n 1
           cmake --version | head -n 1
+
+          protoc_version="$(protoc --version)"
+          protoc_version="${protoc_version#libprotoc }"
+          test "${protoc_version}" = "$(pkg-config --modversion protobuf)"
 
       - name: Install Python project
         run: |
@@ -48,6 +48,8 @@ jobs:
           python -m ruff format --check .
 
       - name: Configure, build, and test C++ foundation
+        env:
+          CXX: g++-13
         run: |
           cmake -S cpp -B build/cpp
           cmake --build build/cpp

@@ -1,0 +1,47 @@
+[
+  {
+    "name": "mixed_case",
+    "input": "GoOgLe AutoComplete",
+    "expected": "google autocomplete"
+  },
+  {
+    "name": "punctuation",
+    "input": "Hello, world!",
+    "expected": "hello world"
+  },
+  {
+    "name": "multiple_punctuation_characters",
+    "input": "Wait... what?!",
+    "expected": "wait what"
+  },
+  {
+    "name": "punctuation_adjacent_to_words",
+    "input": "rock-and-roll",
+    "expected": "rockandroll"
+  },
+  {
+    "name": "repeated_spaces",
+    "input": "one     two   three",
+    "expected": "one two three"
+  },
+  {
+    "name": "leading_and_trailing_spaces",
+    "input": "   padded text   ",
+    "expected": "padded text"
+  },
+  {
+    "name": "punctuation_and_spaces",
+    "input": "  Hello,       WORLD!!!  ",
+    "expected": "hello world"
+  },
+  {
+    "name": "empty_string",
+    "input": "",
+    "expected": ""
+  },
+  {
+    "name": "punctuation_only_input",
+    "input": "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+    "expected": ""
+  }
+]

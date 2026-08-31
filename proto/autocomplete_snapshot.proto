@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package autocomplete.snapshot.v1;
+
+// A corpus line and the stable metadata needed to reconstruct SentenceRecord.
+message SentenceRecord {
+  uint64 sentence_id = 1;
+  string original = 2;
+  string normalized = 3;
+  string source_path = 4;
+  uint64 line_number = 5;
+}
+
+// The logical payload of one record shard.
+message RecordShard {
+  repeated SentenceRecord records = 1;
+}
+
+// One character n-gram and its sorted, unique sentence IDs.
+message IndexEntry {
+  uint32 gram_size = 1;
+  string gram = 2;
+  repeated uint64 sentence_ids = 3;
+}
+
+// The logical payload of one index shard.
+message IndexShard {
+  repeated IndexEntry entries = 1;
+}
+
+// Information required to locate and validate a snapshot shard.
+message ShardInfo {
+  string relative_path = 1;
+  uint64 item_count = 2;
+  uint64 byte_size = 3;
+  string sha256 = 4;
+}
+
+// Metadata describing one immutable, versioned snapshot.
+message SnapshotManifest {
+  uint32 schema_version = 1;
+  string snapshot_id = 2;
+  string normalization_version = 3;
+  string index_strategy_version = 4;
+  repeated uint32 gram_sizes = 5;
+  string corpus_digest = 6;
+  string created_at_utc = 7;
+  repeated ShardInfo record_shards = 8;
+  repeated ShardInfo index_shards = 9;
+}

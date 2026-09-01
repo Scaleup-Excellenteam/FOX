@@ -78,22 +78,49 @@ def _intersect_sorted(left: Sequence[int], right: Sequence[int]) -> PostingArray
 
 def _union_sorted(left: Sequence[int], right: Sequence[int]) -> list[int]:
     result: list[int] = []
-    left_index = right_index = 0
-    while left_index < len(left) or right_index < len(right):
-        if right_index >= len(right) or (
-            left_index < len(left) and left[left_index] < right[right_index]
-        ):
-            value = left[left_index]
-            left_index += 1
-        elif left_index >= len(left) or right[right_index] < left[left_index]:
-            value = right[right_index]
-            right_index += 1
+    append = result.append
+    left_iterator = iter(left)
+    right_iterator = iter(right)
+
+    try:
+        left_id = next(left_iterator)
+    except StopIteration:
+        return list(right_iterator)
+    try:
+        right_id = next(right_iterator)
+    except StopIteration:
+        return [left_id, *left_iterator]
+
+    while True:
+        if left_id < right_id:
+            append(left_id)
+            try:
+                left_id = next(left_iterator)
+            except StopIteration:
+                append(right_id)
+                result.extend(right_iterator)
+                return result
+        elif right_id < left_id:
+            append(right_id)
+            try:
+                right_id = next(right_iterator)
+            except StopIteration:
+                append(left_id)
+                result.extend(left_iterator)
+                return result
         else:
-            value = left[left_index]
-            left_index += 1
-            right_index += 1
-        result.append(value)
-    return result
+            append(left_id)
+            try:
+                left_id = next(left_iterator)
+            except StopIteration:
+                result.extend(right_iterator)
+                return result
+            try:
+                right_id = next(right_iterator)
+            except StopIteration:
+                append(left_id)
+                result.extend(left_iterator)
+                return result
 
 
 class SearchIndex:

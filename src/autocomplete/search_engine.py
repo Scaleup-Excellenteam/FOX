@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from autocomplete.matcher import match_and_score as _match_and_score
 from autocomplete.models import AutoCompleteData, SentenceRecord
 from autocomplete.ranking import rank_results
 
@@ -13,12 +14,6 @@ def _normalize(prefix: str) -> str:
     from autocomplete.normalization import normalize
 
     return normalize(prefix)
-
-
-def _match_and_score(normalized_query: str, normalized_sentence: str) -> int | None:
-    from autocomplete.matcher import match_and_score
-
-    return match_and_score(normalized_query, normalized_sentence)
 
 
 class SearchEngine:

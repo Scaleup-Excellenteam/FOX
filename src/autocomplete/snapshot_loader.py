@@ -20,6 +20,7 @@ from .models import SentenceRecord
 VERSIONS = (1, 1, 1)
 GRAM_SIZES = (1, 2, 3)
 MAX_PAYLOAD = 8 * 1024 * 1024
+MAX_SENTENCE_ID = 0xFFFFFFFF
 MessageType = TypeVar("MessageType", bound=Message)
 
 
@@ -119,8 +120,10 @@ def load_snapshot(snapshot_path: Path) -> tuple[dict[int, SentenceRecord], Searc
                 or path.as_posix() != value.source_path
             ):
                 raise SnapshotError("invalid source path")
-            if not value.sentence_id or value.sentence_id in records:
-                raise SnapshotError("invalid or duplicate record identifier")
+            if not 0 < value.sentence_id <= MAX_SENTENCE_ID:
+                raise SnapshotError("record identifier is outside uint32 range")
+            if value.sentence_id in records:
+                raise SnapshotError("duplicate record identifier")
             if not value.line_number:
                 raise SnapshotError("invalid record line number")
             records[value.sentence_id] = SentenceRecord(
@@ -161,7 +164,7 @@ def load_snapshot(snapshot_path: Path) -> tuple[dict[int, SentenceRecord], Searc
             ids = PostingArray()
             previous = 0
             for sentence_id in value.sentence_ids:
-                if sentence_id <= previous or sentence_id > 0xFFFFFFFF:
+                if sentence_id <= previous or sentence_id > MAX_SENTENCE_ID:
                     raise SnapshotError("posting IDs are not strictly increasing")
                 if sentence_id not in records:
                     raise SnapshotError("posting references unknown sentence ID")

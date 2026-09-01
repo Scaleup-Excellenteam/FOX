@@ -8,53 +8,78 @@ from autocomplete.scoring import (
 )
 
 
-def _substitution_position(query: str, sentence: str, start: int) -> int | None:
-    mismatch_position: int | None = None
-    for query_index, query_character in enumerate(query):
-        if query_character == sentence[start + query_index]:
-            continue
-        if mismatch_position is not None:
-            return None
-        mismatch_position = query_index + 1
-    return mismatch_position
-
-
-def _extra_query_position(
-    query: str, sentence: str, start: int, target_length: int
+def _best_gap_position(
+    query: str,
+    sentence: str,
+    *,
+    substitution: bool,
 ) -> int | None:
-    """Return the best query position removable for this shorter target."""
+    """Return the latest position matching two query pieces around one character."""
 
-    index = 0
-    while index < target_length and query[index] == sentence[start + index]:
-        index += 1
+    query_length = len(query)
+    sentence_length = len(sentence)
+    window_length = query_length if substitution else query_length + 1
+    if window_length > sentence_length:
+        return None
 
-    if index == target_length:
-        # Consuming equal characters first chooses the latest legal deletion.
-        # Penalties never increase with position, so that alignment scores best.
-        return len(query)
+    # An inserted sentence character at either boundary would leave ``query``
+    # as an exact substring. The caller has already ruled exact matches out.
+    lowest_index = 0 if substitution else 1
+    highest_index = query_length - 1
+    last_start = sentence_length - window_length
+    find = sentence.find
+    startswith = sentence.startswith
 
-    deleted_index = index
-    for target_index in range(deleted_index, target_length):
-        if query[target_index + 1] != sentence[start + target_index]:
-            return None
-    return deleted_index + 1
+    for index in range(highest_index, lowest_index - 1, -1):
+        if substitution:
+            left = query[:index]
+            right = query[index + 1 :]
+        else:
+            left = query[:index]
+            right = query[index:]
+
+        left_length = index
+        right_length = query_length - index - (1 if substitution else 0)
+
+        if left_length == 0 and right_length == 0:
+            return index + 1
+
+        # Anchor on the longer fixed piece so repeated-character inputs produce
+        # as few Python-level occurrence checks as possible. ``find`` and
+        # ``startswith`` compare the actual characters in optimized C loops.
+        if left_length >= right_length:
+            start = find(left, 0, last_start + left_length)
+            while start != -1:
+                if startswith(right, start + left_length + 1):
+                    return index + 1
+                start = find(left, start + 1, last_start + left_length)
+        else:
+            right_offset = left_length + 1
+            right_start = find(
+                right,
+                right_offset,
+                last_start + right_offset + right_length,
+            )
+            while right_start != -1:
+                start = right_start - right_offset
+                if startswith(left, start):
+                    return index + 1
+                right_start = find(
+                    right,
+                    right_start + 1,
+                    last_start + right_offset + right_length,
+                )
+
+    return None
 
 
-def _missing_query_position(query: str, sentence: str, start: int) -> int | None:
-    """Return the best position of one target character missing from query."""
+def _best_extra_query_position(query: str, sentence: str) -> int | None:
+    """Return the latest position whose removal makes a substring match."""
 
-    index = 0
-    while index < len(query) and query[index] == sentence[start + index]:
-        index += 1
-
-    if index == len(query):
-        return len(query) + 1
-
-    inserted_index = index
-    for query_index in range(inserted_index, len(query)):
-        if query[query_index] != sentence[start + query_index + 1]:
-            return None
-    return inserted_index + 1
+    for index in range(len(query) - 1, -1, -1):
+        if query[:index] + query[index + 1 :] in sentence:
+            return index + 1
+    return None
 
 
 def match_and_score(query: str, sentence: str) -> int | None:
@@ -68,7 +93,6 @@ def match_and_score(query: str, sentence: str) -> int | None:
         raise ValueError("query must not be empty")
 
     query_length = len(query)
-    sentence_length = len(sentence)
 
     # Exact score is strictly higher than every edited score for this query.
     if query in sentence:
@@ -76,33 +100,29 @@ def match_and_score(query: str, sentence: str) -> int | None:
 
     best_score: int | None = None
 
-    if query_length <= sentence_length:
-        for start in range(sentence_length - query_length + 1):
-            position = _substitution_position(query, sentence, start)
-            if position is None:
-                continue
-            score = edited_score(query_length - 1, substitution_penalty(position))
-            if best_score is None or score > best_score:
-                best_score = score
+    position = _best_gap_position(query, sentence, substitution=True)
+    if position is not None:
+        best_score = edited_score(
+            query_length - 1,
+            substitution_penalty(position),
+        )
 
-    shorter_length = query_length - 1
-    if shorter_length <= sentence_length:
-        for start in range(sentence_length - shorter_length + 1):
-            position = _extra_query_position(query, sentence, start, shorter_length)
-            if position is None:
-                continue
-            score = edited_score(query_length - 1, extra_or_missing_penalty(position))
-            if best_score is None or score > best_score:
-                best_score = score
+    position = _best_extra_query_position(query, sentence)
+    if position is not None:
+        score = edited_score(
+            query_length - 1,
+            extra_or_missing_penalty(position),
+        )
+        if best_score is None or score > best_score:
+            best_score = score
 
-    longer_length = query_length + 1
-    if longer_length <= sentence_length:
-        for start in range(sentence_length - longer_length + 1):
-            position = _missing_query_position(query, sentence, start)
-            if position is None:
-                continue
-            score = edited_score(query_length, extra_or_missing_penalty(position))
-            if best_score is None or score > best_score:
-                best_score = score
+    position = _best_gap_position(query, sentence, substitution=False)
+    if position is not None:
+        score = edited_score(
+            query_length,
+            extra_or_missing_penalty(position),
+        )
+        if best_score is None or score > best_score:
+            best_score = score
 
     return best_score

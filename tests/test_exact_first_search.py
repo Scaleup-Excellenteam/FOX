@@ -126,8 +126,7 @@ def test_exactly_five_exact_matches_skip_fuzzy_generation_and_matching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     records = [
-        make_record(identifier, f"exact ab {identifier}")
-        for identifier in range(1, 6)
+        make_record(identifier, f"exact ab {identifier}") for identifier in range(1, 6)
     ]
     records.append(make_record(6, "fuzzy ac", normalized="ac"))
     indexed, reference, index = engines(records, reject_fuzzy=True)
@@ -150,8 +149,7 @@ def test_complete_exact_posting_is_scanned_and_late_best_result_wins(
     query: str,
 ) -> None:
     records = [
-        make_record(identifier, f"z{identifier} {query}")
-        for identifier in range(1, 7)
+        make_record(identifier, f"z{identifier} {query}") for identifier in range(1, 7)
     ]
     records.append(make_record(7, f"alpha {query}"))
     indexed, reference, index = engines(records, reject_fuzzy=True)
@@ -208,8 +206,7 @@ def test_duplicate_exact_records_from_different_sources_are_preserved() -> None:
 
 def test_raw_query_is_normalized_before_exact_posting_lookup() -> None:
     records = [
-        make_record(identifier, f"exact ab {identifier}")
-        for identifier in range(1, 6)
+        make_record(identifier, f"exact ab {identifier}") for identifier in range(1, 6)
     ]
     indexed, reference, index = engines(records, reject_fuzzy=True)
 
@@ -222,8 +219,7 @@ def test_raw_query_is_normalized_before_exact_posting_lookup() -> None:
 @pytest.mark.parametrize("k", [0, 1, 5])
 def test_exact_first_preserves_k_behavior(k: int) -> None:
     records = [
-        make_record(identifier, f"exact abc {identifier}")
-        for identifier in range(1, 7)
+        make_record(identifier, f"exact abc {identifier}") for identifier in range(1, 7)
     ]
     indexed, reference, index = engines(records, reject_fuzzy=True)
 

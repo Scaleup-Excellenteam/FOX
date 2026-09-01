@@ -127,9 +127,7 @@ def test_show_timing_flag_is_forwarded_after_successful_startup(
         lambda *, show_timing: cli_calls.append(show_timing),
     )
 
-    status = main_module.main(
-        ["--snapshot", "data/snapshots/current", "--show-timing"]
-    )
+    status = main_module.main(["--snapshot", "data/snapshots/current", "--show-timing"])
 
     assert status == 0
     assert cli_calls == [True]

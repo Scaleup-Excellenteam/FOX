@@ -119,8 +119,6 @@ def test_twenty_thousand_random_unions_match_frozen_reference() -> None:
         actual = _union_sorted(left, right)
         streamed = list(_iter_union_sorted(left, right))
         if actual != expected or streamed != expected:
-            mismatches.append(
-                (left_values, right_values, expected, actual, streamed)
-            )
+            mismatches.append((left_values, right_values, expected, actual, streamed))
 
     assert mismatches == []

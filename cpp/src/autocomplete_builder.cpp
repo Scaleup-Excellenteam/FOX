@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -243,6 +244,80 @@ class StagingGuard {
   bool published_ = false;
 };
 
+struct CorpusRecord {
+  std::uint64_t sentence_id;
+  std::string source_path;
+  std::uint64_t line_number;
+  std::string original;
+  std::string normalized;
+};
+
+using RecordConsumer = std::function<void(const CorpusRecord&)>;
+
+CorpusInspection scan_corpus(const fs::path& root,
+                             const RecordConsumer& consume_record) {
+  if (!fs::is_directory(root)) {
+    throw std::runtime_error("corpus root is not a directory: " + root.string());
+  }
+
+  const auto files = discover_files(root);
+  Sha256 corpus_digest;
+  std::uint64_t line_count = 0;
+  std::uint64_t skipped_count = 0;
+  std::uint64_t sentence_id = 0;
+
+  for (const auto& [relative, path] : files) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+      throw std::runtime_error("cannot read corpus file: " + relative);
+    }
+    std::string line;
+    std::uint64_t line_number = 0;
+    bool first_line = true;
+    while (std::getline(input, line)) {
+      ++line_number;
+      ++line_count;
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+      if (first_line && line.size() >= 3 &&
+          static_cast<unsigned char>(line[0]) == 0xefU &&
+          static_cast<unsigned char>(line[1]) == 0xbbU &&
+          static_cast<unsigned char>(line[2]) == 0xbfU) {
+        line.erase(0, 3);
+      }
+      first_line = false;
+      if (!is_valid_utf8(line)) {
+        throw std::runtime_error("invalid UTF-8 in " + relative + ":" +
+                                 std::to_string(line_number));
+      }
+      const std::string normalized = normalize(line);
+      if (normalized.empty()) {
+        ++skipped_count;
+        continue;
+      }
+      if (sentence_id == std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("sentence count exceeds uint32 posting capacity");
+      }
+      ++sentence_id;
+
+      CorpusRecord record{sentence_id, relative, line_number, line, normalized};
+      corpus_digest.update(u64_be(record.sentence_id));
+      update_string(corpus_digest, record.source_path);
+      corpus_digest.update(u64_be(record.line_number));
+      update_string(corpus_digest, record.original);
+      update_string(corpus_digest, record.normalized);
+      consume_record(record);
+    }
+    if (input.bad()) {
+      throw std::runtime_error("read failure in corpus file: " + relative);
+    }
+  }
+
+  return CorpusInspection{corpus_digest.finish_hex(), files.size(), line_count,
+                          sentence_id, skipped_count};
+}
+
 }  // namespace
 
 bool is_valid_utf8(const std::string& input) {
@@ -328,6 +403,11 @@ std::vector<std::string> character_grams(const std::string& normalized,
   return grams;
 }
 
+CorpusInspection inspect_corpus(const fs::path& corpus_root) {
+  const fs::path root = fs::absolute(corpus_root).lexically_normal();
+  return scan_corpus(root, [](const CorpusRecord&) {});
+}
+
 int build_snapshot(const fs::path& corpus_root,
                    const fs::path& output_directory) {
   const auto started = std::chrono::steady_clock::now();
@@ -345,7 +425,6 @@ int build_snapshot(const fs::path& corpus_root,
                              output.parent_path().string());
   }
 
-  const auto files = discover_files(root);
   const fs::path staging = staging_path_for(output);
   if (!fs::create_directory(staging)) {
     throw std::runtime_error("cannot create staging directory: " + staging.string());
@@ -353,69 +432,24 @@ int build_snapshot(const fs::path& corpus_root,
   StagingGuard staging_guard(staging);
   FramedWriter records_writer(staging / kRecordsFile);
   PostingMap postings;
-  Sha256 corpus_digest;
-  std::uint64_t line_count = 0;
-  std::uint64_t skipped_count = 0;
-  std::uint64_t sentence_id = 0;
+  const CorpusInspection inspection = scan_corpus(
+      root, [&](const CorpusRecord& corpus_record) {
+        ::autocomplete::snapshot::v1::SentenceRecordProto record;
+        record.set_sentence_id(corpus_record.sentence_id);
+        record.set_original(corpus_record.original);
+        record.set_normalized(corpus_record.normalized);
+        record.set_source_path(corpus_record.source_path);
+        record.set_line_number(corpus_record.line_number);
+        records_writer.write(record);
 
-  for (const auto& [relative, path] : files) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) {
-      throw std::runtime_error("cannot read corpus file: " + relative);
-    }
-    std::string line;
-    std::uint64_t line_number = 0;
-    bool first_line = true;
-    while (std::getline(input, line)) {
-      ++line_number;
-      ++line_count;
-      if (!line.empty() && line.back() == '\r') {
-        line.pop_back();
-      }
-      if (first_line && line.size() >= 3 &&
-          static_cast<unsigned char>(line[0]) == 0xefU &&
-          static_cast<unsigned char>(line[1]) == 0xbbU &&
-          static_cast<unsigned char>(line[2]) == 0xbfU) {
-        line.erase(0, 3);
-      }
-      first_line = false;
-      if (!is_valid_utf8(line)) {
-        throw std::runtime_error("invalid UTF-8 in " + relative + ":" +
-                                 std::to_string(line_number));
-      }
-      const std::string normalized = normalize(line);
-      if (normalized.empty()) {
-        ++skipped_count;
-        continue;
-      }
-      if (sentence_id == std::numeric_limits<std::uint32_t>::max()) {
-        throw std::runtime_error("sentence count exceeds uint32 posting capacity");
-      }
-      ++sentence_id;
-      ::autocomplete::snapshot::v1::SentenceRecordProto record;
-      record.set_sentence_id(sentence_id);
-      record.set_original(line);
-      record.set_normalized(normalized);
-      record.set_source_path(relative);
-      record.set_line_number(line_number);
-      records_writer.write(record);
-
-      corpus_digest.update(u64_be(sentence_id));
-      update_string(corpus_digest, relative);
-      corpus_digest.update(u64_be(line_number));
-      update_string(corpus_digest, line);
-      update_string(corpus_digest, normalized);
-
-      for (std::uint32_t size = 1; size <= 3; ++size) {
-        for (const std::string& gram : character_grams(normalized, size)) {
-          postings[{size, gram}].push_back(static_cast<std::uint32_t>(sentence_id));
+        for (std::uint32_t size = 1; size <= 3; ++size) {
+          for (const std::string& gram :
+               character_grams(corpus_record.normalized, size)) {
+            postings[{size, gram}].push_back(
+                static_cast<std::uint32_t>(corpus_record.sentence_id));
+          }
         }
-      }
-    }
-    if (input.bad()) {
-      throw std::runtime_error("read failure in corpus file: " + relative);
-    }
-  }
+      });
   records_writer.close();
 
   FramedWriter index_writer(staging / kIndexFile);
@@ -439,7 +473,7 @@ int build_snapshot(const fs::path& corpus_root,
   }
   index_writer.close();
 
-  const std::string corpus_hex = corpus_digest.finish_hex();
+  const std::string& corpus_hex = inspection.corpus_digest_sha256;
   const std::string index_hex = index_digest.finish_hex();
   const std::string identity =
       "corpus_digest_sha256=" + corpus_hex + "\n" +
@@ -460,7 +494,7 @@ int build_snapshot(const fs::path& corpus_root,
   manifest.set_created_at_utc("1970-01-01T00:00:00Z");
   manifest.add_record_files(std::string(kRecordsFile));
   manifest.add_index_files(std::string(kIndexFile));
-  manifest.set_searchable_record_count(sentence_id);
+  manifest.set_searchable_record_count(inspection.searchable_record_count);
   manifest.set_posting_count(postings.size());
   manifest.set_index_digest_sha256(index_hex);
   write_file(staging / kManifestFile, serialize_deterministically(manifest));
@@ -470,15 +504,18 @@ int build_snapshot(const fs::path& corpus_root,
   const auto elapsed = std::chrono::duration<double>(
       std::chrono::steady_clock::now() - started);
   std::cerr << "[autocomplete_builder] complete"
-            << " files=" << files.size() << " lines=" << line_count
-            << " accepted=" << sentence_id << " skipped=" << skipped_count
+            << " files=" << inspection.file_count
+            << " lines=" << inspection.line_count
+            << " accepted=" << inspection.searchable_record_count
+            << " skipped=" << inspection.skipped_record_count
             << " grams=" << postings.size()
             << " posting_ids=" << posting_entries
             << " elapsed_seconds=" << std::fixed << std::setprecision(3)
             << elapsed.count() << " output=" << output.string()
             << " snapshot_id=" << snapshot_id << '\n';
-  std::cout << "snapshot_id=" << snapshot_id << " sentences=" << sentence_id
-            << " files=" << files.size() << '\n';
+  std::cout << "snapshot_id=" << snapshot_id
+            << " sentences=" << inspection.searchable_record_count
+            << " files=" << inspection.file_count << '\n';
   return 0;
 }
 

@@ -96,7 +96,8 @@ def _validate_manifest(manifest: SnapshotManifestProto) -> None:
         _safe_file(Path(), name)
 
 
-def load_snapshot(snapshot_path: Path) -> tuple[dict[int, SentenceRecord], SearchIndex]:
+def load_snapshot_manifest(snapshot_path: Path) -> SnapshotManifestProto:
+    """Read and validate the compatibility and shape of a snapshot manifest."""
     root = Path(snapshot_path)
     try:
         raw = (root / "manifest.binpb").read_bytes()
@@ -106,6 +107,12 @@ def load_snapshot(snapshot_path: Path) -> tuple[dict[int, SentenceRecord], Searc
         raise SnapshotError("invalid manifest size")
     manifest = _parse(SnapshotManifestProto(), raw, "manifest")
     _validate_manifest(manifest)
+    return manifest
+
+
+def load_snapshot(snapshot_path: Path) -> tuple[dict[int, SentenceRecord], SearchIndex]:
+    root = Path(snapshot_path)
+    manifest = load_snapshot_manifest(root)
 
     records: dict[int, SentenceRecord] = {}
     corpus = hashlib.sha256()

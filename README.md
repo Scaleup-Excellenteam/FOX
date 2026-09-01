@@ -158,7 +158,7 @@ mkdir -p data/snapshots
 python -m autocomplete.build_snapshot \
   build/cpp/autocomplete_builder \
   data/raw/Archive.zip \
-  data/snapshots/current
+  data/snapshots/manual
 ```
 
 `data/raw/Archive.zip` is the corpus path used for the representative build; do
@@ -166,7 +166,7 @@ not assume that every clone distributes this archive. A successful build
 atomically publishes:
 
 ```text
-data/snapshots/current/
+data/snapshots/manual/
 |-- manifest.binpb
 |-- records.binpb
 `-- index.binpb
@@ -181,6 +181,33 @@ build/cpp/autocomplete_builder \
   --output <snapshot-output-directory>
 ```
 
+## Smart Snapshot Preparation
+
+Use the preparation command when a corpus is expected to change over time:
+
+```bash
+python -m autocomplete.prepare_snapshot \
+  --builder build/cpp/autocomplete_builder \
+  --corpus data/raw/Archive.zip \
+  --snapshot-root data/snapshots
+```
+
+Preparation inspects the authoritative ZIP or directory using the builder's
+existing semantic corpus digest. If the active snapshot is fully valid and has
+the same corpus digest, schema/normalization/index versions, and gram sizes, it
+is reused without rebuilding the index. Otherwise, preparation builds and fully
+validates a new immutable `data/snapshots/<snapshot-id>/` directory before
+atomically replacing the relative `data/snapshots/current` pointer file.
+
+ZIP extraction remains temporary. A failed extraction, build, validation, or
+activation leaves the previous pointer unchanged. No corpus inspection or
+preparation work is added to online query execution. Repeated commands report
+either `status=REUSED` or `status=BUILT_AND_ACTIVATED`.
+
+The managed root reserves `current` as a pointer file. If that path is already a
+legacy snapshot directory from the one-shot build command, move it or select a
+new snapshot root; preparation reports the conflict without modifying it.
+
 ## Run the Autocomplete CLI
 
 Start the application with an explicit local snapshot path:
@@ -189,7 +216,9 @@ Start the application with an explicit local snapshot path:
 python -m autocomplete.main --snapshot data/snapshots/current
 ```
 
-The snapshot is fully loaded and validated before the interactive CLI starts.
+The argument may be an immutable snapshot directory or the `current` pointer
+created by smart preparation. The selected snapshot is fully loaded and
+validated exactly once before the interactive CLI starts.
 
 ## CLI Interaction
 

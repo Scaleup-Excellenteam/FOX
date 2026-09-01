@@ -77,6 +77,28 @@ def test_production_builder_is_byte_deterministic(builder, tmp_path):
     }
 
 
+def test_corpus_inspection_matches_built_manifest(builder, tmp_path):
+    corpus = tmp_path / "corpus"
+    (corpus / "nested").mkdir(parents=True)
+    (corpus / "z.txt").write_bytes(b"!!!\r\nLast line\r\n")
+    (corpus / "nested" / "a.txt").write_bytes(b"\xef\xbb\xbfHello, WORLD!!!\n\n")
+
+    inspection = subprocess.run(
+        [str(builder), "--inspect-corpus", str(corpus)],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    snapshot = tmp_path / "snapshot"
+    assert run_builder(builder, corpus, snapshot).returncode == 0
+    value = SnapshotManifestProto()
+    value.ParseFromString((snapshot / "manifest.binpb").read_bytes())
+
+    assert f"corpus_digest_sha256={value.corpus_digest_sha256}" in inspection.stdout
+    assert "files=2 lines=4 accepted=2 skipped=2" in inspection.stdout
+    assert not list(tmp_path.glob(".snapshot.incomplete-*"))
+
+
 def test_production_builder_matches_reference_logically(
     builder, reference_builder, tmp_path
 ):

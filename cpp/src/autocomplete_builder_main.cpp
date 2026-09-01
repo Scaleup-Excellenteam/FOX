@@ -15,6 +15,17 @@ int main(int argc, char* argv[]) {
       std::cout << autocomplete::builder::normalize(input);
       return 0;
     }
+    if (argc == 3 && std::string(argv[1]) == "--inspect-corpus") {
+      const auto inspection = autocomplete::builder::inspect_corpus(
+          std::filesystem::path(argv[2]));
+      std::cout << "corpus_digest_sha256="
+                << inspection.corpus_digest_sha256
+                << " files=" << inspection.file_count
+                << " lines=" << inspection.line_count
+                << " accepted=" << inspection.searchable_record_count
+                << " skipped=" << inspection.skipped_record_count << '\n';
+      return 0;
+    }
     if (argc != 5 || std::string(argv[1]) != "--corpus" ||
         std::string(argv[3]) != "--output") {
       std::cerr << "usage: autocomplete_builder --corpus CORPUS_ROOT "

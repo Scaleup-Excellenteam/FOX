@@ -113,6 +113,28 @@ def test_direct_argv_is_used_without_reading_real_sys_argv(
     assert supplied_paths == [Path("/explicit/snapshot")]
 
 
+def test_show_timing_flag_is_forwarded_after_successful_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = object()
+    cli_calls: list[bool] = []
+    monkeypatch.setattr(main_module, "_load_snapshot", lambda path: ({}, object()))
+    monkeypatch.setattr(main_module, "SearchEngine", lambda records, index: engine)
+    monkeypatch.setattr(main_module, "configure_default_engine", lambda value: None)
+    monkeypatch.setattr(
+        main_module,
+        "run_cli",
+        lambda *, show_timing: cli_calls.append(show_timing),
+    )
+
+    status = main_module.main(
+        ["--snapshot", "data/snapshots/current", "--show-timing"]
+    )
+
+    assert status == 0
+    assert cli_calls == [True]
+
+
 @pytest.mark.parametrize(
     "loader_error",
     [

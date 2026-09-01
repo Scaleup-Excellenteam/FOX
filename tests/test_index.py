@@ -35,6 +35,45 @@ def test_one_character_and_empty_broad_fallback():
 
 
 @pytest.mark.parametrize(
+    "query",
+    ["", "t", "to", "to ", "to b", "to be", "abcdef", "abcdefg"],
+)
+def test_streamed_candidates_equal_materialized_candidates(query):
+    idx = index()
+
+    assert list(idx.iter_candidate_ids(query)) == idx.get_candidate_ids(query)
+
+
+def test_streamed_candidate_type_validation_is_eager():
+    with pytest.raises(TypeError, match="string"):
+        index().iter_candidate_ids(None)
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("t", [1, 2, 6]),
+        ("to", [1, 2, 6]),
+        ("to ", [1, 6]),
+        ("zzz", []),
+    ],
+)
+def test_exact_candidates_use_complete_direct_posting(query, expected):
+    assert index().get_exact_candidate_ids(query) == expected
+
+
+@pytest.mark.parametrize("query", ["", "abcd"])
+def test_exact_candidates_reject_queries_outside_direct_gram_sizes(query):
+    with pytest.raises(ValueError, match="between 1 and 3"):
+        index().get_exact_candidate_ids(query)
+
+
+def test_exact_candidates_validate_type():
+    with pytest.raises(TypeError, match="string"):
+        index().get_exact_candidate_ids(None)
+
+
+@pytest.mark.parametrize(
     ("query", "expected"),
     [
         ("to", [1, 2, 3, 6]),  # 1 + 1
@@ -57,6 +96,12 @@ def test_repeated_grams_and_duplicate_sentences_have_unique_ids():
 
 def test_long_seed_intersects_every_overlapping_trigram():
     assert index().get_candidate_ids("abcxyz") == [5]
+
+
+def test_single_trigram_seed_reuses_immutable_posting_without_copying():
+    idx = index()
+
+    assert idx._seed_candidates("to ") is idx.postings[(3, "to ")]
 
 
 def test_partition_union_keeps_candidates_from_both_sides():

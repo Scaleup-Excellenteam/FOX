@@ -32,6 +32,11 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Path to the local autocomplete snapshot.",
     )
+    parser.add_argument(
+        "--show-timing",
+        action="store_true",
+        help="Print the autocomplete search time after each query.",
+    )
     return parser
 
 
@@ -50,7 +55,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     engine = SearchEngine(records_by_id, index)
     configure_default_engine(engine)
-    run_cli()
+    if arguments.show_timing:
+        run_cli(show_timing=True)
+    else:
+        run_cli()
     return 0
 
 

@@ -8,13 +8,26 @@ from autocomplete.search_engine import SearchEngine
 
 
 class FakeIndex:
-    def __init__(self, candidate_ids: list[int]) -> None:
+    def __init__(
+        self,
+        candidate_ids: list[int],
+        exact_candidate_ids: list[int] | None = None,
+    ) -> None:
         self.candidate_ids = candidate_ids
+        self.exact_candidate_ids = exact_candidate_ids or []
         self.queries: list[str] = []
+        self.exact_queries: list[str] = []
 
     def get_candidate_ids(self, normalized_query: str) -> list[int]:
         self.queries.append(normalized_query)
         return list(self.candidate_ids)
+
+    def iter_candidate_ids(self, normalized_query: str):
+        return iter(self.get_candidate_ids(normalized_query))
+
+    def get_exact_candidate_ids(self, normalized_query: str) -> list[int]:
+        self.exact_queries.append(normalized_query)
+        return list(self.exact_candidate_ids)
 
 
 def make_record(
@@ -201,12 +214,174 @@ def test_default_k_returns_best_five_after_full_ranking(
     }
     index = FakeIndex([1, 2, 3, 4, 5, 6, 7])
     patch_normalize(monkeypatch)
-    patch_matcher(monkeypatch, lambda query, sentence: scores[sentence])
+    evaluated: list[str] = []
+
+    def matcher(query: str, sentence: str) -> int:
+        evaluated.append(sentence)
+        return scores[sentence]
+
+    patch_matcher(monkeypatch, matcher)
 
     result = SearchEngine(records, index).search("prefix")
 
     assert len(result) == 5
     assert [item.score for item in result] == [100, 6, 5, 4, 3]
+    assert evaluated == [record.normalized for record in records.values()]
+
+
+@pytest.mark.parametrize(("candidate_count", "expected_count"), [(4, 4), (5, 5)])
+def test_bounded_selection_handles_fewer_than_or_exactly_five_results(
+    monkeypatch: pytest.MonkeyPatch,
+    candidate_count: int,
+    expected_count: int,
+) -> None:
+    records = {
+        sentence_id: make_record(sentence_id)
+        for sentence_id in range(1, candidate_count + 1)
+    }
+    patch_normalize(monkeypatch)
+    patch_matcher(monkeypatch, lambda query, sentence: 10)
+
+    result = SearchEngine(records, FakeIndex(list(records))).search("prefix")
+
+    assert len(result) == expected_count
+
+
+def test_naive_first_five_regression_strongest_result_is_last(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = {sentence_id: make_record(sentence_id) for sentence_id in range(1, 7)}
+    scores = {
+        record.normalized: score
+        for record, score in zip(records.values(), [5, 4, 3, 2, 1, 100], strict=True)
+    }
+    evaluated: list[str] = []
+    patch_normalize(monkeypatch)
+
+    def matcher(query: str, sentence: str) -> int:
+        evaluated.append(sentence)
+        return scores[sentence]
+
+    patch_matcher(monkeypatch, matcher)
+
+    result = SearchEngine(records, FakeIndex(list(records))).search("prefix")
+
+    assert evaluated == [record.normalized for record in records.values()]
+    assert [item.score for item in result] == [100, 5, 4, 3, 2]
+
+
+def test_maximum_score_bound_prunes_only_candidates_that_cannot_enter_top_five(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = {
+        sentence_id: make_record(
+            sentence_id,
+            original=original,
+            normalized=f"a sentence {sentence_id}",
+        )
+        for sentence_id, original in enumerate(
+            ["a1", "a2", "a3", "a4", "a5", "z1", "z2"],
+            start=1,
+        )
+    }
+    evaluated: list[str] = []
+    patch_normalize(monkeypatch, "a")
+
+    def matcher(query: str, sentence: str) -> int:
+        evaluated.append(sentence)
+        return 2
+
+    patch_matcher(monkeypatch, matcher)
+
+    result = SearchEngine(records, FakeIndex(list(records))).search("prefix")
+
+    assert evaluated == [records[sentence_id].normalized for sentence_id in range(1, 6)]
+    assert [item.completed_sentence for item in result] == [
+        "a1",
+        "a2",
+        "a3",
+        "a4",
+        "a5",
+    ]
+
+
+def test_maximum_score_bound_still_evaluates_late_tie_break_winner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = {
+        sentence_id: make_record(
+            sentence_id,
+            original=original,
+            normalized=f"a sentence {sentence_id}",
+        )
+        for sentence_id, original in enumerate(
+            ["z1", "z2", "z3", "z4", "z5", "alpha"],
+            start=1,
+        )
+    }
+    evaluated: list[str] = []
+    patch_normalize(monkeypatch, "a")
+
+    def matcher(query: str, sentence: str) -> int:
+        evaluated.append(sentence)
+        return 2
+
+    patch_matcher(monkeypatch, matcher)
+
+    result = SearchEngine(records, FakeIndex(list(records))).search("prefix")
+
+    assert evaluated == [record.normalized for record in records.values()]
+    assert [item.completed_sentence for item in result] == [
+        "alpha",
+        "z1",
+        "z2",
+        "z3",
+        "z4",
+    ]
+
+
+def test_duplicate_candidate_ids_preserve_current_multiplicity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = make_record(1, original="duplicate")
+    patch_normalize(monkeypatch)
+    patch_matcher(monkeypatch, lambda query, sentence: 10)
+
+    result = SearchEngine({1: record}, FakeIndex([1, 1])).search("prefix")
+
+    assert len(result) == 2
+    assert result[0] == result[1]
+
+
+@pytest.mark.parametrize(
+    ("raw_query", "records", "expected"),
+    [
+        (
+            "  HE-LLO!! ",
+            {1: make_record(1, original="Hello world", normalized="hello world")},
+            [("Hello world", 10)],
+        ),
+        (
+            "hello",
+            {1: make_record(1, original="Say hello", normalized="say hello")},
+            [("Say hello", 10)],
+        ),
+        (
+            "hxllo",
+            {1: make_record(1, original="Say hello", normalized="say hello")},
+            [("Say hello", 4)],
+        ),
+        ("missing", {1: make_record(1, normalized="unrelated")}, []),
+    ],
+)
+def test_bounded_search_preserves_normalization_exact_fuzzy_and_empty_results(
+    raw_query: str,
+    records: dict[int, SentenceRecord],
+    expected: list[tuple[str, int]],
+) -> None:
+    result = SearchEngine(records, FakeIndex(list(records))).search(raw_query)
+
+    assert [(item.completed_sentence, item.score) for item in result] == expected
 
 
 def test_mixed_scores_are_ranked_descending(
@@ -286,10 +461,11 @@ def test_candidate_input_order_does_not_determine_result_order(
     assert [item.score for item in forward] == [9, 2]
 
 
-def test_k_zero_returns_empty_without_search_work(
+def test_k_zero_returns_empty_without_constructing_selector_or_search_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     index = FakeIndex([1])
+    monkeypatch.setattr(search_engine_module, "TopKSelector", fail_if_called)
     monkeypatch.setattr(search_engine_module, "_normalize", fail_if_called)
     patch_matcher(monkeypatch, fail_if_called)
 

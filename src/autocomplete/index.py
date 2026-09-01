@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from array import array
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 
 
@@ -62,18 +62,22 @@ _EMPTY_POSTING = FrozenPosting()
 
 def _intersect_sorted(left: Sequence[int], right: Sequence[int]) -> PostingArray:
     result = PostingArray()
-    left_index = right_index = 0
-    while left_index < len(left) and right_index < len(right):
-        left_id, right_id = left[left_index], right[right_index]
-        if left_id == right_id:
-            result.append(left_id)
-            left_index += 1
-            right_index += 1
-        elif left_id < right_id:
-            left_index += 1
-        else:
-            right_index += 1
-    return result
+    left_iterator = iter(left)
+    right_iterator = iter(right)
+    try:
+        left_id = next(left_iterator)
+        right_id = next(right_iterator)
+        while True:
+            if left_id < right_id:
+                left_id = next(left_iterator)
+            elif right_id < left_id:
+                right_id = next(right_iterator)
+            else:
+                result.append(left_id)
+                left_id = next(left_iterator)
+                right_id = next(right_iterator)
+    except StopIteration:
+        return result
 
 
 def _union_sorted(left: Sequence[int], right: Sequence[int]) -> list[int]:
@@ -123,6 +127,58 @@ def _union_sorted(left: Sequence[int], right: Sequence[int]) -> list[int]:
                 return result
 
 
+def _iter_union_sorted(
+    left: Sequence[int],
+    right: Sequence[int],
+) -> Iterator[int]:
+    """Yield the sorted union without materializing the final candidate list."""
+
+    left_iterator = iter(left)
+    right_iterator = iter(right)
+    try:
+        left_id = next(left_iterator)
+    except StopIteration:
+        yield from right_iterator
+        return
+    try:
+        right_id = next(right_iterator)
+    except StopIteration:
+        yield left_id
+        yield from left_iterator
+        return
+
+    while True:
+        if left_id < right_id:
+            yield left_id
+            try:
+                left_id = next(left_iterator)
+            except StopIteration:
+                yield right_id
+                yield from right_iterator
+                return
+        elif right_id < left_id:
+            yield right_id
+            try:
+                right_id = next(right_iterator)
+            except StopIteration:
+                yield left_id
+                yield from left_iterator
+                return
+        else:
+            yield left_id
+            try:
+                left_id = next(left_iterator)
+            except StopIteration:
+                yield from right_iterator
+                return
+            try:
+                right_id = next(right_iterator)
+            except StopIteration:
+                yield left_id
+                yield from left_iterator
+                return
+
+
 class SearchIndex:
     """Immutable compact 1/2/3-character postings for recall-safe candidates."""
 
@@ -168,6 +224,8 @@ class SearchIndex:
         if not posting_lists or any(not posting for posting in posting_lists):
             return PostingArray()
         posting_lists.sort(key=len)
+        if len(posting_lists) == 1:
+            return posting_lists[0]
         result = PostingArray(posting_lists[0])
         for posting in posting_lists[1:]:
             result = _intersect_sorted(result, posting)
@@ -184,3 +242,27 @@ class SearchIndex:
         left = self._seed_candidates(normalized_query[:split_at])
         right = self._seed_candidates(normalized_query[split_at:])
         return _union_sorted(left, right)
+
+    def iter_candidate_ids(self, normalized_query: str) -> Iterator[int]:
+        """Yield fuzzy-safe candidates without materializing their final union."""
+
+        if not isinstance(normalized_query, str):
+            raise TypeError("normalized_query must be a string")
+        if len(normalized_query) <= 1:
+            return iter(self._all_sentence_ids)
+        split_at = len(normalized_query) // 2
+        left = self._seed_candidates(normalized_query[:split_at])
+        right = self._seed_candidates(normalized_query[split_at:])
+        return _iter_union_sorted(left, right)
+
+    def get_exact_candidate_ids(self, normalized_query: str) -> Sequence[int]:
+        """Return the direct exact posting for a 1/2/3-character query."""
+
+        if not isinstance(normalized_query, str):
+            raise TypeError("normalized_query must be a string")
+        if not 1 <= len(normalized_query) <= 3:
+            raise ValueError("exact candidate query length must be between 1 and 3")
+        return self._postings.get(
+            (len(normalized_query), normalized_query),
+            _EMPTY_POSTING,
+        )

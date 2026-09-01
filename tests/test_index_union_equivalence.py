@@ -5,7 +5,12 @@ from collections.abc import Sequence
 
 import pytest
 
-from autocomplete.index import FrozenPosting, PostingArray, _union_sorted
+from autocomplete.index import (
+    FrozenPosting,
+    PostingArray,
+    _iter_union_sorted,
+    _union_sorted,
+)
 
 
 def _reference_union_sorted(
@@ -67,7 +72,10 @@ def test_crafted_unions_match_frozen_reference(
     left = _sequence(left_values, left_kind)
     right = _sequence(right_values, right_kind)
 
-    assert _union_sorted(left, right) == _reference_union_sorted(left, right)
+    expected = _reference_union_sorted(left, right)
+
+    assert _union_sorted(left, right) == expected
+    assert list(_iter_union_sorted(left, right)) == expected
 
 
 def _random_input_pairs() -> list[tuple[list[int], list[int]]]:
@@ -109,7 +117,10 @@ def test_twenty_thousand_random_unions_match_frozen_reference() -> None:
         right = _sequence(right_values, case_index // 4)
         expected = _reference_union_sorted(left, right)
         actual = _union_sorted(left, right)
-        if actual != expected:
-            mismatches.append((left_values, right_values, expected, actual))
+        streamed = list(_iter_union_sorted(left, right))
+        if actual != expected or streamed != expected:
+            mismatches.append(
+                (left_values, right_values, expected, actual, streamed)
+            )
 
     assert mismatches == []

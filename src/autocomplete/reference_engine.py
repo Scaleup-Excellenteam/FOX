@@ -5,9 +5,10 @@ from autocomplete.ranking import rank_results
 
 
 def _normalize(prefix: str) -> str:
+    from autocomplete.keyboard_layout import convert_hebrew_keyboard_to_english
     from autocomplete.normalization import normalize
 
-    return normalize(prefix)
+    return normalize(convert_hebrew_keyboard_to_english(prefix))
 
 
 def _match_and_score(normalized_query: str, normalized_sentence: str) -> int | None:

@@ -69,6 +69,22 @@ def test_empty_records_returns_empty_without_matching(
     assert ReferenceEngine({}).search("prefix") == []
 
 
+def test_hebrew_keyboard_query_is_converted_before_matching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queries: list[str] = []
+    record = make_record(1, normalized="hello")
+
+    def matcher(normalized_query: str, normalized_sentence: str) -> None:
+        queries.append(normalized_query)
+        return None
+
+    patch_matcher(monkeypatch, matcher)
+
+    assert ReferenceEngine({1: record}).search("יקךךם") == []
+    assert queries == ["hello"]
+
+
 def test_non_empty_query_matches_every_record_including_discarded_records(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -11,9 +11,10 @@ if TYPE_CHECKING:
 
 
 def _normalize(prefix: str) -> str:
+    from autocomplete.keyboard_layout import convert_hebrew_keyboard_to_english
     from autocomplete.normalization import normalize
 
-    return normalize(prefix)
+    return normalize(convert_hebrew_keyboard_to_english(prefix))
 
 
 class SearchEngine:

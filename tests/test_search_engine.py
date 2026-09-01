@@ -82,6 +82,13 @@ def test_no_candidates_returns_empty_without_calling_matcher(
     assert index.queries == ["normalized query"]
 
 
+def test_hebrew_keyboard_query_is_converted_before_index_lookup() -> None:
+    index = FakeIndex([])
+
+    assert SearchEngine({}, index).search("יקךךם") == []
+    assert index.queries == ["hello"]
+
+
 def test_matcher_receives_normalized_query_and_record_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

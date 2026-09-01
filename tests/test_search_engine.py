@@ -47,6 +47,17 @@ def patch_normalize(
     )
 
 
+def patch_translate(
+    monkeypatch: pytest.MonkeyPatch,
+    translated_text: str = "translated prefix",
+) -> None:
+    monkeypatch.setattr(
+        search_engine_module,
+        "_translate",
+        lambda prefix: translated_text,
+    )
+
+
 def patch_matcher(
     monkeypatch: pytest.MonkeyPatch,
     matcher: Callable[[str, str], int | None],
@@ -105,6 +116,24 @@ def test_matcher_receives_normalized_query_and_record_text(
 
     assert calls == [("normalized query", "normalized sentence")]
     assert index.queries == ["normalized query"]
+
+
+def test_prefix_is_translated_to_spanish_before_normalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    normalize_calls: list[str] = []
+    patch_translate(monkeypatch, "prefijo traducido")
+    monkeypatch.setattr(
+        search_engine_module,
+        "_normalize",
+        lambda prefix: normalize_calls.append(prefix) or "normalized query",
+    )
+    patch_matcher(monkeypatch, lambda query, sentence: None)
+    engine = SearchEngine({}, FakeIndex([]))
+
+    engine.search("raw prefix")
+
+    assert normalize_calls == ["prefijo traducido"]
 
 
 def test_matcher_none_discards_false_positive_candidate(

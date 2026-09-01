@@ -45,6 +45,13 @@ def _normalize(text: str) -> str:
     return normalize(text)
 
 
+def _translate(text: str) -> str:
+    """Delegate Spanish query translation to the production implementation."""
+    from autocomplete.translation import translate_to_spanish
+
+    return translate_to_spanish(text)
+
+
 def _match_and_score(query: str, sentence: str) -> int | None:
     """Delegate verification and scoring to Member 1's implementation."""
     from autocomplete.matcher import match_and_score
@@ -264,7 +271,7 @@ def run_benchmark(
         for bucket in BUCKET_NAMES
     }
 
-    normalized_queries = [_normalize(query) for query in queries]
+    normalized_queries = [_normalize(_translate(query)) for query in queries]
     if any(not normalized for normalized in normalized_queries):
         bucket_data["empty"] = {
             "query_count": 0,

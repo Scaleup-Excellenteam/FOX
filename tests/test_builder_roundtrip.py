@@ -67,12 +67,21 @@ def test_real_snapshot_drives_real_search(builder, tmp_path):
 
     assert run(builder, corpus, snapshot).returncode == 0
     records, index = load_snapshot(snapshot)
-    results = SearchEngine(records, index).search("hello world")
+    engine = SearchEngine(records, index)
 
+    # "hello" and "world" are both in the Spanish lexicon, so the query is
+    # translated to "hola mundo" before matching and no longer finds the
+    # English corpus content -- this is the new translate-all-queries
+    # contract, not a regression.
+    assert engine.search("hello world") == []
+
+    # Words absent from the lexicon pass through translation unchanged, so
+    # the full builder-to-search round trip still finds real matches.
+    results = engine.search("unrelated sentence")
     assert [
         (result.completed_sentence, result.source_text, result.offset, result.score)
         for result in results
-    ] == [("Hello world", "sentences.txt", 1, 22)]
+    ] == [("Unrelated sentence", "sentences.txt", 3, 38)]
 
 
 def test_completely_empty_corpus_builds_loads_and_searches(builder, tmp_path):

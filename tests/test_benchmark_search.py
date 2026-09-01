@@ -70,15 +70,19 @@ def patch_delegates(
     monkeypatch: pytest.MonkeyPatch,
     *,
     normalize: Callable[[str], str] = lambda text: text,
+    translate: Callable[[str], str] = lambda text: text,
     matcher: Callable[[str, str], int | None] = lambda query, sentence: (
         len(query) if query in sentence else None
     ),
 ) -> None:
     monkeypatch.setattr(benchmark, "_normalize", normalize)
+    monkeypatch.setattr(benchmark, "_translate", translate)
     monkeypatch.setattr(benchmark, "_match_and_score", matcher)
     monkeypatch.setattr(search_engine_module, "_normalize", normalize)
+    monkeypatch.setattr(search_engine_module, "_translate", translate)
     monkeypatch.setattr(search_engine_module, "_match_and_score", matcher)
     monkeypatch.setattr(reference_engine_module, "_normalize", normalize)
+    monkeypatch.setattr(reference_engine_module, "_translate", translate)
     monkeypatch.setattr(reference_engine_module, "_match_and_score", matcher)
 
 

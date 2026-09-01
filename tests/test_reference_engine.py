@@ -46,8 +46,36 @@ def patch_matcher(
     monkeypatch.setattr(reference_engine_module, "_match_and_score", matcher)
 
 
+def patch_translate(
+    monkeypatch: pytest.MonkeyPatch,
+    translated_text: str = "translated prefix",
+) -> None:
+    monkeypatch.setattr(
+        reference_engine_module,
+        "_translate",
+        lambda prefix: translated_text,
+    )
+
+
 def fail_if_called(*args: object) -> None:
     pytest.fail(f"unexpected call with arguments {args!r}")
+
+
+def test_prefix_is_translated_to_spanish_before_normalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    normalize_calls: list[str] = []
+    patch_translate(monkeypatch, "prefijo traducido")
+    monkeypatch.setattr(
+        reference_engine_module,
+        "_normalize",
+        lambda prefix: normalize_calls.append(prefix) or "normalized query",
+    )
+    patch_matcher(monkeypatch, lambda query, sentence: None)
+
+    ReferenceEngine({1: make_record(1)}).search("raw prefix")
+
+    assert normalize_calls == ["prefijo traducido"]
 
 
 def test_normalized_empty_query_returns_empty_without_matching(

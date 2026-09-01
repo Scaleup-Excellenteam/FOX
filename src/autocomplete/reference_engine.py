@@ -10,6 +10,12 @@ def _normalize(prefix: str) -> str:
     return normalize(prefix)
 
 
+def _translate(prefix: str) -> str:
+    from autocomplete.translation import translate_to_spanish
+
+    return translate_to_spanish(prefix)
+
+
 def _match_and_score(normalized_query: str, normalized_sentence: str) -> int | None:
     from autocomplete.matcher import match_and_score
 
@@ -35,7 +41,7 @@ class ReferenceEngine:
         if k == 0:
             return []
 
-        normalized_query = _normalize(prefix)
+        normalized_query = _normalize(_translate(prefix))
         if normalized_query == "":
             return []
 

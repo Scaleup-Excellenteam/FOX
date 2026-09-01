@@ -16,6 +16,12 @@ def _normalize(prefix: str) -> str:
     return normalize(prefix)
 
 
+def _translate(prefix: str) -> str:
+    from autocomplete.translation import translate_to_spanish
+
+    return translate_to_spanish(prefix)
+
+
 class SearchEngine:
     def __init__(
         self,
@@ -37,7 +43,7 @@ class SearchEngine:
         if k == 0:
             return []
 
-        normalized_query = _normalize(prefix)
+        normalized_query = _normalize(_translate(prefix))
         if normalized_query == "":
             return []
 

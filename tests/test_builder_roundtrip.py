@@ -7,6 +7,7 @@ from autocomplete.generated.autocomplete_snapshot_pb2 import (
     GramPostingProto,
     SnapshotManifestProto,
 )
+from autocomplete.search_engine import SearchEngine
 from autocomplete.snapshot_loader import load_snapshot
 
 
@@ -54,6 +55,47 @@ def test_recursive_deterministic_roundtrip(builder, tmp_path):
         (3, "z.txt", 2, "banana banana"),
     ]
     assert index.postings[(3, "ana")] == (3,)
+
+
+def test_real_snapshot_drives_real_search(builder, tmp_path):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "sentences.txt").write_text(
+        "Hello world\nHello there\nUnrelated sentence\n", encoding="utf-8"
+    )
+    snapshot = tmp_path / "snapshot"
+
+    assert run(builder, corpus, snapshot).returncode == 0
+    records, index = load_snapshot(snapshot)
+    results = SearchEngine(records, index).search("hello world")
+
+    assert [
+        (result.completed_sentence, result.source_text, result.offset, result.score)
+        for result in results
+    ] == [("Hello world", "sentences.txt", 1, 22)]
+
+
+def test_completely_empty_corpus_builds_loads_and_searches(builder, tmp_path):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    snapshot = tmp_path / "snapshot"
+
+    assert run(builder, corpus, snapshot).returncode == 0
+    assert {path.name for path in snapshot.iterdir()} == {
+        "manifest.binpb",
+        "records.binpb",
+        "index.binpb",
+    }
+    manifest = SnapshotManifestProto()
+    manifest.ParseFromString((snapshot / "manifest.binpb").read_bytes())
+    records, index = load_snapshot(snapshot)
+
+    assert manifest.searchable_record_count == 0
+    assert manifest.posting_count == 0
+    assert records == {}
+    assert dict(index.postings) == {}
+    assert index.get_candidate_ids("anything") == []
+    assert SearchEngine(records, index).search("anything") == []
 
 
 def test_manifest_and_complete_postings_use_frozen_types(builder, tmp_path):

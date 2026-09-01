@@ -141,6 +141,19 @@ def test_duplicate_and_zero_record_ids_are_rejected(builder, tmp_path):
         load_snapshot(snapshot)
 
 
+def test_out_of_range_record_id_is_rejected(builder, tmp_path):
+    snapshot = build(builder, tmp_path)
+    path = snapshot / "records.binpb"
+    values = messages(path, SentenceRecordProto)
+    values[0].sentence_id = 0x1_0000_0000
+    write_messages(path, values)
+
+    with pytest.raises(
+        SnapshotError, match="record identifier is outside uint32 range"
+    ):
+        load_snapshot(snapshot)
+
+
 def test_posting_unknown_unsorted_and_invalid_gram_are_rejected(builder, tmp_path):
     snapshot = build(builder, tmp_path)
     path = snapshot / "index.binpb"

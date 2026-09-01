@@ -43,6 +43,19 @@ The implementation has three logical areas:
 - **Search Integration / Quality / CLI:** orchestration, deterministic ranking,
   public API, reference engine, CLI, and benchmark harness.
 
+## Why Protobuf?
+
+The offline index builder is written in C++, while the search runtime is written
+in Python. Both use generated code from the same `.proto` schema: the builder
+serializes sentence records, n-gram posting lists, and snapshot metadata, and the
+Python runtime deserializes and validates that snapshot before serving searches.
+
+This file-based snapshot boundary gives both languages a clear data contract and
+separates offline index construction from online search. The runtime loads the
+prebuilt records and index instead of rebuilding them from the corpus at every
+startup. Protobuf defines the schema and serialized representation; it is not a
+transport mechanism.
+
 ## Requirements
 
 The validated toolchain is:

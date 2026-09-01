@@ -203,6 +203,81 @@ def test_empty_api_result_displays_clear_message(
     assert "no completions" in output[0].lower()
 
 
+def test_timing_disabled_preserves_existing_output_and_does_not_read_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api_result = result("Completion", source_text="source.txt", offset=7, score=9)
+    patch_api(monkeypatch, lambda prefix: [api_result])
+    monkeypatch.setattr(
+        cli_module.time,
+        "perf_counter",
+        lambda: pytest.fail("clock must not be read when timing is disabled"),
+    )
+    output: list[str] = []
+
+    cli_module._process_query("query", output.append)
+
+    assert output == ["Completion | score: 9 | source: source.txt | offset: 7"]
+
+
+def test_timing_enabled_prints_timing_line_for_no_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    readings = iter([10.0, 10.001234])
+    patch_api(monkeypatch, lambda prefix: [])
+    monkeypatch.setattr(cli_module.time, "perf_counter", lambda: next(readings))
+    output: list[str] = []
+
+    cli_module._process_query("query", output.append, show_timing=True)
+
+    assert output == ["No completions found.", "Search time: 1.23 ms"]
+
+
+def test_timing_boundary_wraps_only_search_not_input_or_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[object] = []
+    input_events = iter(["query", EOFError()])
+    clock_readings = iter([20.0, 20.0125])
+
+    def input_function(prompt: str) -> str:
+        events.append(("input", prompt))
+        event = next(input_events)
+        if isinstance(event, BaseException):
+            raise event
+        return event
+
+    def search(prefix: str) -> list[AutoCompleteData]:
+        events.append(("search", prefix))
+        return [result("Completion")]
+
+    def perf_counter() -> float:
+        events.append("clock")
+        return next(clock_readings)
+
+    patch_api(monkeypatch, search)
+    monkeypatch.setattr(cli_module.time, "perf_counter", perf_counter)
+
+    cli_module.run_cli(
+        input_function,
+        lambda line: events.append(("output", line)),
+        show_timing=True,
+    )
+
+    assert events == [
+        ("input", "Enter query: "),
+        "clock",
+        ("search", "query"),
+        "clock",
+        (
+            "output",
+            "Completion | score: 10 | source: sentences.txt | offset: 1",
+        ),
+        ("output", "Search time: 12.50 ms"),
+        ("input", "Enter query: "),
+    ]
+
+
 def test_empty_input_is_delegated_to_official_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -429,4 +429,7 @@ def test_search_does_not_call_preparation(monkeypatch):
         def get_candidate_ids(self, normalized_query):
             return []
 
+        def iter_candidate_ids(self, normalized_query):
+            return iter(())
+
     assert SearchEngine({}, EmptyIndex()).search("query") == []

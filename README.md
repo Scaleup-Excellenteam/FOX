@@ -216,6 +216,10 @@ Start the application with an explicit local snapshot path:
 python -m autocomplete.main --snapshot data/snapshots/current
 ```
 
+Add `--show-timing` to print `Search time: X.XX ms` after each query. The
+measurement covers only the autocomplete lookup; startup, snapshot loading,
+input collection, and result formatting are excluded.
+
 The argument may be an immutable snapshot directory or the `current` pointer
 created by smart preparation. The selected snapshot is fully loaded and
 validated exactly once before the interactive CLI starts.

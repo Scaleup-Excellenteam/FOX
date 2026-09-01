@@ -36,3 +36,29 @@ def test_score_arithmetic_and_negative_scores() -> None:
     assert exact_score(6) == 12
     assert edited_score(5, 4) == 6
     assert edited_score(0, 5) == -5
+
+
+@pytest.mark.parametrize("query_length", range(1, 65))
+def test_exact_score_is_strict_upper_bound_for_every_fuzzy_score_form(
+    query_length: int,
+) -> None:
+    upper_bound = exact_score(query_length)
+
+    for position in range(1, query_length + 1):
+        substitution_score = edited_score(
+            query_length - 1,
+            substitution_penalty(position),
+        )
+        extra_query_character_score = edited_score(
+            query_length - 1,
+            extra_or_missing_penalty(position),
+        )
+        assert substitution_score < upper_bound
+        assert extra_query_character_score < upper_bound
+
+    for position in range(1, query_length + 2):
+        extra_sentence_character_score = edited_score(
+            query_length,
+            extra_or_missing_penalty(position),
+        )
+        assert extra_sentence_character_score < upper_bound

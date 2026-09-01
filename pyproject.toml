@@ -36,7 +36,7 @@ extend-exclude = [
     "01_SEARCH_CORE_SPEC.md",
     "02_OFFLINE_INDEX_SNAPSHOT_SPEC.md",
     "03_SEARCH_QUALITY_CLI_SPEC.md",
-    "src/autocomplete/generated/autocomplete_snapshot_pb2.py",
+    "src/autocomplete/generated/*_pb2.py",
 ]
 
 [tool.ruff.lint]

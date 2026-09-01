@@ -19,7 +19,6 @@ fi
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd -- "${script_dir}/.." && pwd)"
 proto_dir="${repository_root}/proto"
-proto_file="${proto_dir}/autocomplete_snapshot.proto"
 python_output_dir="${repository_root}/src/autocomplete/generated"
 cpp_output_dir="${repository_root}/build/generated/proto"
 
@@ -29,7 +28,8 @@ protoc \
   --proto_path="${proto_dir}" \
   --python_out="${python_output_dir}" \
   --cpp_out="${cpp_output_dir}" \
-  "${proto_file}"
+  "${proto_dir}/autocomplete_snapshot.proto" \
+  "${proto_dir}/autocomplete_search.proto"
 
 echo "generated Python binding in ${python_output_dir}"
 echo "generated C++ bindings in ${cpp_output_dir}"

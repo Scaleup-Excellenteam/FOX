@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package autocomplete.search.v1;
+
+message SearchRequest {
+  uint32 protocol_version = 1;
+  string query = 2;
+  uint32 max_results = 3;
+}
+
+message SearchResult {
+  string completed_sentence = 1;
+  sint32 score = 2;
+  string source_text = 3;
+  uint64 offset = 4;
+  uint64 sentence_id = 5;
+}
+
+message SearchSuccess {
+  repeated SearchResult results = 1;
+}
+
+enum SearchErrorCode {
+  SEARCH_ERROR_CODE_UNSPECIFIED = 0;
+  SEARCH_ERROR_CODE_INVALID_REQUEST = 1;
+  SEARCH_ERROR_CODE_UNSUPPORTED_VERSION = 2;
+  SEARCH_ERROR_CODE_INTERNAL = 3;
+}
+
+message SearchError {
+  SearchErrorCode code = 1;
+  string message = 2;
+}
+
+message SearchResponse {
+  uint32 protocol_version = 1;
+  oneof outcome {
+    SearchSuccess success = 2;
+    SearchError error = 3;
+  }
+}

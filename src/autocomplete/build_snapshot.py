@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import re
 import shutil
 import stat
@@ -10,6 +11,9 @@ import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+
+from .generated.autocomplete_snapshot_pb2 import SnapshotManifestProto
+from .observability import event, human_bytes, safe_name, safe_reason, short_id
 
 SUPPORTED_COMPRESSION = {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
 
@@ -195,7 +199,7 @@ def extract_zip_corpus(
         raise
 
 
-def build_snapshot_from_input(
+def _build_snapshot_from_input_impl(
     builder: Path,
     corpus_or_zip: Path,
     snapshot: Path,
@@ -262,12 +266,200 @@ def build_snapshot_from_input(
             f"Ratio: {ratio:,.2f}x).\n"
             f"zip_entries={stats.entries} processed_files={stats.processed_files} "
             f"zip_records={record_count} "
+            f"uncompressed_bytes={stats.uncompressed_bytes} "
+            f"extraction_ms={stats.elapsed_ms:.3f} "
             f"skipped_directories={stats.skipped_directories} "
             f"skipped_unsupported_files={stats.skipped_unsupported_files}\n"
         )
         return subprocess.CompletedProcess(
             result.args, result.returncode, prefix + result.stdout, result.stderr
         )
+
+
+_BUILDER_SUMMARY = re.compile(
+    r"complete files=(?P<files>\d+) lines=(?P<lines>\d+) accepted=(?P<accepted>\d+) "
+    r"skipped=(?P<skipped>\d+) grams=(?P<grams>\d+)(?: grams_1=(?P<g1>\d+) "
+    r"grams_2=(?P<g2>\d+) grams_3=(?P<g3>\d+))? posting_ids=(?P<ids>\d+) "
+    r"elapsed_seconds=(?P<seconds>[0-9.]+)"
+)
+
+
+def build_snapshot_from_input(
+    builder: Path,
+    corpus_or_zip: Path,
+    snapshot: Path,
+    *,
+    zip_limits: ZipExtractionLimits | None = None,
+    builder_timeout_seconds: float = 600.0,
+) -> subprocess.CompletedProcess[str]:
+    build_id = short_id()
+    started = time.perf_counter_ns()
+    source = Path(corpus_or_zip)
+    output = Path(snapshot)
+    is_zip = source.suffix.lower() == ".zip" and not source.is_dir()
+    compressed_bytes = source.stat().st_size if is_zip and source.exists() else 0
+    event(
+        "offline",
+        "build.started",
+        build_id=build_id,
+        input_type="ZIP" if is_zip else "directory",
+        input_name=safe_name(source),
+        compressed_zip_size_bytes=compressed_bytes,
+        compressed_zip_size_human=human_bytes(compressed_bytes),
+        snapshot_destination=safe_name(output),
+        snapshot_format_version=1,
+        normalization_version=1,
+        index_version=1,
+        gram_sizes="1,2,3",
+        start_timestamp_utc=__import__("datetime")
+        .datetime.now(__import__("datetime").timezone.utc)
+        .isoformat(),
+    )
+    try:
+        result = _build_snapshot_from_input_impl(
+            builder,
+            source,
+            output,
+            zip_limits=zip_limits,
+            builder_timeout_seconds=builder_timeout_seconds,
+        )
+        zip_match = re.search(
+            r"zip_entries=(\d+) processed_files=(\d+) zip_records=(\d+) "
+            r"uncompressed_bytes=(\d+) extraction_ms=([0-9.]+) "
+            r"skipped_directories=(\d+) skipped_unsupported_files=(\d+)",
+            result.stdout,
+        )
+        if zip_match:
+            entries, files, _, extracted_raw, extraction_raw, directories, ignored = (
+                zip_match.groups()
+            )
+            entries, files, extracted_bytes, directories, ignored = map(
+                int, (entries, files, extracted_raw, directories, ignored)
+            )
+            event(
+                "offline",
+                "zip.validated",
+                build_id=build_id,
+                validation_result="accepted",
+                archive_entry_count=entries,
+                accepted_text_file_count=files,
+                ignored_non_text_count=ignored,
+                rejected_entry_count=0,
+                compressed_size_bytes=compressed_bytes,
+                expected_uncompressed_size_bytes=extracted_bytes,
+                validation_duration_ms=float(extraction_raw),
+            )
+            event(
+                "offline",
+                "zip.extracted",
+                build_id=build_id,
+                extracted_text_file_count=files,
+                extracted_corpus_size_bytes=extracted_bytes,
+                extracted_corpus_size_human=human_bytes(extracted_bytes),
+                extraction_duration_ms=float(extraction_raw),
+                temporary_path_exposed=False,
+                skipped_directory_count=directories,
+            )
+        summary = _BUILDER_SUMMARY.search(result.stderr)
+        if result.returncode != 0:
+            event(
+                "offline",
+                "build.failed",
+                logging.ERROR,
+                build_id=build_id,
+                failed_stage="cpp_builder",
+                error_category="builder_exit",
+                reason="production builder returned a non-zero exit code",
+                cpp_exit_code=result.returncode,
+                elapsed_ms=(time.perf_counter_ns() - started) / 1_000_000,
+                partial_snapshot_published=(output / "manifest.binpb").exists(),
+                staging_cleanup="best_effort",
+                temporary_extraction_cleanup="complete",
+                status="failed",
+            )
+            return result
+        fields = summary.groupdict() if summary else {}
+        event(
+            "offline",
+            "builder.completed",
+            build_id=build_id,
+            builder_identity=safe_name(Path(builder)),
+            cpp_exit_code=result.returncode,
+            text_files_processed=int(fields.get("files") or 0),
+            physical_lines_processed=int(fields.get("lines") or 0),
+            retained_sentences=int(fields.get("accepted") or 0),
+            skipped_normalized_empty_lines=int(fields.get("skipped") or 0),
+            cpp_builder_ms=float(fields.get("seconds") or 0) * 1000,
+            status="success",
+        )
+        manifest = SnapshotManifestProto()
+        manifest.ParseFromString((output / "manifest.binpb").read_bytes())
+        sizes = {
+            name: (output / name).stat().st_size
+            for name in ("records.binpb", "index.binpb", "manifest.binpb")
+        }
+        total = sum(sizes.values())
+        event(
+            "offline",
+            "snapshot.published",
+            build_id=build_id,
+            publication_status="published",
+            snapshot_id=manifest.snapshot_id,
+            corpus_digest=manifest.corpus_digest_sha256,
+            index_digest=manifest.index_digest_sha256,
+            records_written=manifest.searchable_record_count,
+            posting_lists_written=manifest.posting_count,
+            total_posting_ids=int(fields.get("ids") or 0),
+            unique_1gram_count=int(fields.get("g1") or 0),
+            unique_2gram_count=int(fields.get("g2") or 0),
+            unique_3gram_count=int(fields.get("g3") or 0),
+            snapshot_destination=safe_name(output),
+        )
+        event(
+            "offline",
+            "build.completed",
+            build_id=build_id,
+            archive_entries=int(zip_match.group(1)) if zip_match else 0,
+            text_files_processed=int(fields.get("files") or 0),
+            compressed_zip_size_bytes=compressed_bytes,
+            physical_lines_processed=int(fields.get("lines") or 0),
+            retained_sentences=int(fields.get("accepted") or 0),
+            skipped_normalized_empty_lines=int(fields.get("skipped") or 0),
+            invalid_lines=0,
+            unique_1gram_count=int(fields.get("g1") or 0),
+            unique_2gram_count=int(fields.get("g2") or 0),
+            unique_3gram_count=int(fields.get("g3") or 0),
+            total_posting_lists=manifest.posting_count,
+            total_posting_ids=int(fields.get("ids") or 0),
+            records_written=manifest.searchable_record_count,
+            records_size_bytes=sizes["records.binpb"],
+            index_size_bytes=sizes["index.binpb"],
+            manifest_size_bytes=sizes["manifest.binpb"],
+            total_snapshot_size_bytes=total,
+            total_snapshot_size_human=human_bytes(total),
+            cpp_builder_ms=float(fields.get("seconds") or 0) * 1000,
+            total_offline_ms=(time.perf_counter_ns() - started) / 1_000_000,
+            snapshot_id=manifest.snapshot_id,
+            temporary_extraction_cleanup="complete",
+            status="success",
+        )
+        return result
+    except Exception as error:
+        event(
+            "offline",
+            "build.failed",
+            logging.ERROR,
+            build_id=build_id,
+            failed_stage="offline_build",
+            error_category=type(error).__name__,
+            reason=safe_reason(error),
+            elapsed_ms=(time.perf_counter_ns() - started) / 1_000_000,
+            partial_snapshot_published=(output / "manifest.binpb").exists(),
+            staging_cleanup="best_effort",
+            temporary_extraction_cleanup="best_effort",
+            status="failed",
+        )
+        raise
 
 
 def main() -> int:

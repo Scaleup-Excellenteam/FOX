@@ -82,6 +82,36 @@ def _best_extra_query_position(query: str, sentence: str) -> int | None:
     return None
 
 
+def match_non_exact_and_score(query: str, sentence: str) -> int | None:
+    """Return the highest legal one-edit score for a known non-exact pair."""
+
+    query_length = len(query)
+    best_score: int | None = None
+    position = _best_gap_position(query, sentence, substitution=True)
+    if position is not None:
+        best_score = edited_score(
+            query_length - 1,
+            substitution_penalty(position),
+        )
+    position = _best_extra_query_position(query, sentence)
+    if position is not None:
+        score = edited_score(
+            query_length - 1,
+            extra_or_missing_penalty(position),
+        )
+        if best_score is None or score > best_score:
+            best_score = score
+    position = _best_gap_position(query, sentence, substitution=False)
+    if position is not None:
+        score = edited_score(
+            query_length,
+            extra_or_missing_penalty(position),
+        )
+        if best_score is None or score > best_score:
+            best_score = score
+    return best_score
+
+
 def match_and_score(query: str, sentence: str) -> int | None:
     """Return the highest legal exact/one-edit substring score.
 
@@ -92,37 +122,8 @@ def match_and_score(query: str, sentence: str) -> int | None:
     if query == "":
         raise ValueError("query must not be empty")
 
-    query_length = len(query)
-
     # Exact score is strictly higher than every edited score for this query.
     if query in sentence:
-        return exact_score(query_length)
+        return exact_score(len(query))
 
-    best_score: int | None = None
-
-    position = _best_gap_position(query, sentence, substitution=True)
-    if position is not None:
-        best_score = edited_score(
-            query_length - 1,
-            substitution_penalty(position),
-        )
-
-    position = _best_extra_query_position(query, sentence)
-    if position is not None:
-        score = edited_score(
-            query_length - 1,
-            extra_or_missing_penalty(position),
-        )
-        if best_score is None or score > best_score:
-            best_score = score
-
-    position = _best_gap_position(query, sentence, substitution=False)
-    if position is not None:
-        score = edited_score(
-            query_length,
-            extra_or_missing_penalty(position),
-        )
-        if best_score is None or score > best_score:
-            best_score = score
-
-    return best_score
+    return match_non_exact_and_score(query, sentence)

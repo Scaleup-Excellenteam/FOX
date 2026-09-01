@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import struct
+import time
 from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
 from typing import Any, TypeVar
@@ -16,6 +18,7 @@ from .generated.autocomplete_snapshot_pb2 import (
 )
 from .index import PostingArray, SearchIndex
 from .models import SentenceRecord
+from .observability import event, get_config, human_bytes, safe_name, safe_reason
 
 VERSIONS = (1, 1, 1)
 GRAM_SIZES = (1, 2, 3)
@@ -110,10 +113,16 @@ def load_snapshot_manifest(snapshot_path: Path) -> SnapshotManifestProto:
     return manifest
 
 
-def load_snapshot(snapshot_path: Path) -> tuple[dict[int, SentenceRecord], SearchIndex]:
+def _load_snapshot_impl(
+    snapshot_path: Path, timings: dict[str, int] | None
+) -> tuple[dict[int, SentenceRecord], SearchIndex, SnapshotManifestProto]:
     root = Path(snapshot_path)
+    started = time.perf_counter_ns() if timings is not None else 0
     manifest = load_snapshot_manifest(root)
+    if timings is not None:
+        timings["manifest_ns"] = time.perf_counter_ns() - started
 
+    started = time.perf_counter_ns() if timings is not None else 0
     records: dict[int, SentenceRecord] = {}
     corpus = hashlib.sha256()
     for name in manifest.record_files:
@@ -151,8 +160,12 @@ def load_snapshot(snapshot_path: Path) -> tuple[dict[int, SentenceRecord], Searc
         raise SnapshotError("record count mismatch")
     if corpus.hexdigest() != manifest.corpus_digest_sha256:
         raise SnapshotError("corpus digest mismatch")
+    if timings is not None:
+        timings["records_ns"] = time.perf_counter_ns() - started
 
+    started = time.perf_counter_ns() if timings is not None else 0
     postings: dict[tuple[int, str], PostingArray] = {}
+    total_posting_ids = 0
     last_key: tuple[int, bytes] | None = None
     index_digest = hashlib.sha256()
     for name in manifest.index_files:
@@ -178,6 +191,8 @@ def load_snapshot(snapshot_path: Path) -> tuple[dict[int, SentenceRecord], Searc
                 ids.append(sentence_id)
                 previous = sentence_id
             postings[key] = ids
+            if timings is not None:
+                total_posting_ids += len(ids)
             last_key = order_key
             index_digest.update(struct.pack(">I", value.gram_size))
             _update_string(index_digest, value.gram)
@@ -196,6 +211,107 @@ def load_snapshot(snapshot_path: Path) -> tuple[dict[int, SentenceRecord], Searc
     )
     if hashlib.sha256(identity.encode()).hexdigest() != manifest.snapshot_id:
         raise SnapshotError("snapshot ID mismatch")
-    return records, SearchIndex._from_validated_postings(
-        postings, PostingArray(records)
+    if timings is not None:
+        timings["postings_ns"] = time.perf_counter_ns() - started
+    started = time.perf_counter_ns() if timings is not None else 0
+    index = SearchIndex._from_validated_postings(postings, PostingArray(records))
+    if timings is not None:
+        timings["index_ns"] = time.perf_counter_ns() - started
+        timings["total_posting_ids"] = total_posting_ids
+        timings["record_count"] = len(records)
+        timings["posting_count"] = len(postings)
+    return records, index, manifest
+
+
+def _snapshot_size_fields(
+    root: Path, manifest: SnapshotManifestProto
+) -> dict[str, int | float | bool | str]:
+    """Best-effort size metadata derived from the authoritative file lists."""
+
+    try:
+        records_size = sum(
+            _safe_file(root, name).stat().st_size for name in manifest.record_files
+        )
+        index_size = sum(
+            _safe_file(root, name).stat().st_size for name in manifest.index_files
+        )
+        manifest_size = (root / "manifest.binpb").stat().st_size
+        total_size = records_size + index_size + manifest_size
+        return {
+            "size_metrics_available": True,
+            "record_file_count": len(manifest.record_files),
+            "index_file_count": len(manifest.index_files),
+            "records_size_bytes": records_size,
+            "index_size_bytes": index_size,
+            "manifest_size_bytes": manifest_size,
+            "total_snapshot_size_bytes": total_size,
+            "total_snapshot_size_human": human_bytes(total_size),
+        }
+    except Exception:
+        return {"size_metrics_available": False}
+
+
+def load_snapshot(snapshot_path: Path) -> tuple[dict[int, SentenceRecord], SearchIndex]:
+    root = Path(snapshot_path)
+    config = get_config()
+    if not config.enables(logging.CRITICAL):
+        records, index, _ = _load_snapshot_impl(root, None)
+        return records, index
+
+    total_started = time.perf_counter_ns()
+    timings: dict[str, int] = {}
+    event(
+        "runtime",
+        "snapshot.load_started",
+        snapshot_location=safe_name(root),
     )
+    try:
+        records, index, manifest = _load_snapshot_impl(root, timings)
+        load_compute_ns = time.perf_counter_ns() - total_started
+        measured_ns = sum(
+            timings.get(key, 0)
+            for key in ("manifest_ns", "records_ns", "postings_ns", "index_ns")
+        )
+        try:
+            size_fields = _snapshot_size_fields(root, manifest)
+        except Exception:
+            size_fields = {"size_metrics_available": False}
+        event(
+            "runtime",
+            "snapshot.ready",
+            snapshot_id=manifest.snapshot_id,
+            format_version=manifest.schema_version,
+            normalization_version=manifest.normalization_version,
+            index_version=manifest.index_strategy_version,
+            expected_record_count=manifest.searchable_record_count,
+            expected_posting_list_count=manifest.posting_count,
+            manifest_load_and_validation_ms=timings["manifest_ns"] / 1_000_000,
+            records_load_and_validation_ms=timings["records_ns"] / 1_000_000,
+            postings_load_and_validation_ms=timings["postings_ns"] / 1_000_000,
+            search_index_publication_ms=timings["index_ns"] / 1_000_000,
+            load_unaccounted_ms=max(
+                0,
+                load_compute_ns - measured_ns,
+            )
+            / 1_000_000,
+            load_compute_ms=load_compute_ns / 1_000_000,
+            loaded_record_count=timings["record_count"],
+            loaded_posting_list_count=timings["posting_count"],
+            total_posting_ids=timings["total_posting_ids"],
+            **size_fields,
+            status="ready",
+        )
+        return records, index
+    except Exception as error:
+        event(
+            "runtime",
+            "snapshot.load_failed",
+            logging.ERROR,
+            failed_stage="load_and_integrity_validation",
+            error_category=type(error).__name__,
+            reason_code=safe_reason(error),
+            load_compute_ms=(time.perf_counter_ns() - total_started) / 1_000_000,
+            search_index_published=False,
+            status="failed",
+        )
+        raise

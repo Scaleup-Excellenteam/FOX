@@ -455,6 +455,7 @@ int build_snapshot(const fs::path& corpus_root,
   FramedWriter index_writer(staging / kIndexFile);
   Sha256 index_digest;
   std::uint64_t posting_entries = 0;
+  std::array<std::uint64_t, 4> grams_by_size{};
   for (const auto& [key, ids] : postings) {
     ::autocomplete::snapshot::v1::GramPostingProto posting;
     posting.set_gram_size(key.first);
@@ -470,6 +471,7 @@ int build_snapshot(const fs::path& corpus_root,
       index_digest.update(u64_be(id));
     }
     posting_entries += ids.size();
+    ++grams_by_size[key.first];
   }
   index_writer.close();
 
@@ -509,6 +511,9 @@ int build_snapshot(const fs::path& corpus_root,
             << " accepted=" << inspection.searchable_record_count
             << " skipped=" << inspection.skipped_record_count
             << " grams=" << postings.size()
+            << " grams_1=" << grams_by_size[1]
+            << " grams_2=" << grams_by_size[2]
+            << " grams_3=" << grams_by_size[3]
             << " posting_ids=" << posting_entries
             << " elapsed_seconds=" << std::fixed << std::setprecision(3)
             << elapsed.count() << " output=" << output.string()

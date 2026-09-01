@@ -84,6 +84,9 @@ def patch_delegates(
     monkeypatch.setattr(benchmark, "_match_and_score", matcher)
     monkeypatch.setattr(search_engine_module, "_normalize", normalize)
     monkeypatch.setattr(search_engine_module, "_match_and_score", matcher)
+    monkeypatch.setattr(
+        search_engine_module, "_exact_score", lambda query_length: query_length
+    )
     monkeypatch.setattr(reference_engine_module, "_normalize", normalize)
     monkeypatch.setattr(reference_engine_module, "_match_and_score", matcher)
 

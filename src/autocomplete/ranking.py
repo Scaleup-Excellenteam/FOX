@@ -1,13 +1,11 @@
+from operator import attrgetter
+
 from autocomplete.models import AutoCompleteData
 
 
 def rank_results(results: list[AutoCompleteData]) -> list[AutoCompleteData]:
-    return sorted(
-        results,
-        key=lambda result: (
-            -result.score,
-            result.completed_sentence,
-            result.source_text,
-            result.offset,
-        ),
-    )
+    ranked = sorted(results, key=attrgetter("offset"))
+    ranked.sort(key=attrgetter("source_text"))
+    ranked.sort(key=attrgetter("completed_sentence"))
+    ranked.sort(key=attrgetter("score"), reverse=True)
+    return ranked

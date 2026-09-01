@@ -19,8 +19,9 @@ def _load_snapshot(
     snapshot_path: Path,
 ) -> tuple[dict[int, SentenceRecord], SearchIndex]:
     from autocomplete.snapshot_loader import load_snapshot
+    from autocomplete.snapshot_pointer import resolve_snapshot_path
 
-    return load_snapshot(snapshot_path)
+    return load_snapshot(resolve_snapshot_path(snapshot_path))
 
 
 def _build_parser() -> argparse.ArgumentParser:

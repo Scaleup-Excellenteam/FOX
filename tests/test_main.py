@@ -70,6 +70,28 @@ def test_successful_startup_loads_once_and_configures_before_cli(
     assert isinstance(events[0][1], Path)
 
 
+def test_load_snapshot_resolves_current_pointer(monkeypatch, tmp_path) -> None:
+    from autocomplete import snapshot_loader
+    from autocomplete.snapshot_pointer import activate_snapshot
+
+    snapshot_root = tmp_path / "snapshots"
+    snapshot_root.mkdir()
+    snapshot_id = "a" * 64
+    snapshot = snapshot_root / snapshot_id
+    snapshot.mkdir()
+    activate_snapshot(snapshot_root, snapshot_id)
+    calls = []
+    expected = ({}, object())
+    monkeypatch.setattr(
+        snapshot_loader,
+        "load_snapshot",
+        lambda path: calls.append(path) or expected,
+    )
+
+    assert main_module._load_snapshot(snapshot_root / "current") == expected
+    assert calls == [snapshot]
+
+
 def test_direct_argv_is_used_without_reading_real_sys_argv(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

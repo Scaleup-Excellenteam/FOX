@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import re
 from collections import defaultdict
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from autocomplete.index import SearchIndex
 from autocomplete.models import SentenceRecord
 from autocomplete.normalization import normalize
+from autocomplete.observability import reset_for_tests
 from autocomplete.reference_engine import ReferenceEngine
 from autocomplete.search_engine import SearchEngine
 
@@ -75,9 +77,16 @@ def test_equal_score_ties_match_exhaustive_order_exactly() -> None:
     assert optimized.search("to be") == exhaustive.search("to be")
 
 
-def test_randomized_corpora_and_queries_match_exhaustive_order_exactly() -> None:
+@pytest.mark.parametrize("mode", ["OFF", "INFO", "DETAILED"])
+def test_randomized_corpora_and_queries_match_exhaustive_order_exactly(
+    monkeypatch, tmp_path, mode
+) -> None:
+    monkeypatch.setenv("LOG_DIRECTORY", str(tmp_path / mode.lower()))
+    monkeypatch.setenv("LOG_LEVEL", "OFF" if mode == "OFF" else "INFO")
+    monkeypatch.setenv("DETAILED_PROFILING", str(mode == "DETAILED").lower())
+    reset_for_tests()
     randomizer = random.Random(0xF05A11)
-    alphabet = "abcde     -!?"
+    alphabet = "abcdeéßשלום🙂     -!?"
     for _ in range(40):
         values = []
         for sentence_id in range(35):
@@ -89,4 +98,79 @@ def test_randomized_corpora_and_queries_match_exhaustive_order_exactly() -> None
             for _ in range(12)
         ]
         for query in queries:
-            assert optimized.search(query) == exhaustive.search(query)
+            for k in (0, 1, 5, 50):
+                assert optimized.search(query, k) == exhaustive.search(query, k)
+    reset_for_tests()
+
+
+@pytest.mark.parametrize("mode", ["OFF", "INFO", "DETAILED"])
+def test_all_logging_modes_preserve_k_unicode_duplicates_and_edit_boundaries(
+    monkeypatch, tmp_path, mode
+) -> None:
+    monkeypatch.setenv("LOG_DIRECTORY", str(tmp_path / mode.lower()))
+    monkeypatch.setenv("LOG_LEVEL", "OFF" if mode == "OFF" else "INFO")
+    monkeypatch.setenv("DETAILED_PROFILING", str(mode == "DETAILED").lower())
+    reset_for_tests()
+    values = [
+        ("abcdef", "same.txt", 1),
+        ("abcdef", "same.txt", 1),
+        ("xbcdef", "substitution.txt", 2),
+        ("bcdef", "missing-start.txt", 3),
+        ("abcde", "missing-end.txt", 4),
+        ("xabcdef", "extra-start.txt", 5),
+        ("abcdefx", "extra-end.txt", 6),
+        ("École שלום 🙂", "unicode.txt", 7),
+        ("unrelated", "none.txt", 8),
+    ]
+    optimized, exhaustive = _engines(values)
+
+    for query in (
+        "",
+        "!!!",
+        "a",
+        "ab",
+        "abc",
+        "abcdef",
+        "xbcdef",
+        "bcdef",
+        "abcdefx",
+        "  É-COLE!! ",
+        "שלום",
+        "🙂",
+    ):
+        for k in (0, 1, 5, 20):
+            assert optimized.search(query, k) == exhaustive.search(query, k)
+    reset_for_tests()
+
+
+@pytest.mark.parametrize("mode", ["OFF", "INFO", "DETAILED"])
+@pytest.mark.parametrize(
+    ("prefix", "k"),
+    [
+        (None, 5),
+        (123, 5),
+        ([], 5),
+        ("valid", True),
+        ("valid", 1.5),
+        ("valid", "5"),
+        ("valid", -1),
+    ],
+)
+def test_invalid_input_exception_equivalence_across_logging_modes(
+    monkeypatch, tmp_path, mode, prefix, k
+) -> None:
+    monkeypatch.setenv("LOG_DIRECTORY", str(tmp_path / mode.lower()))
+    monkeypatch.setenv("LOG_LEVEL", "OFF" if mode == "OFF" else "INFO")
+    monkeypatch.setenv("DETAILED_PROFILING", str(mode == "DETAILED").lower())
+    reset_for_tests()
+    optimized, exhaustive = _engines([("one sentence", "source.txt", 1)])
+
+    with pytest.raises(Exception) as expected:
+        exhaustive.search(prefix, k)
+    with pytest.raises(type(expected.value), match=re_escape(str(expected.value))):
+        optimized.search(prefix, k)
+    reset_for_tests()
+
+
+def re_escape(value: str) -> str:
+    return re.escape(value)

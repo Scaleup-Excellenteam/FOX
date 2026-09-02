@@ -140,3 +140,18 @@ def test_hash_mismatch_is_rejected_without_staging(tmp_path) -> None:
 
     assert state.received_chunk_numbers == set()
     assert list((state.staging_dir / "chunks").glob("*.chunk")) == []
+
+
+def test_tampered_ciphertext_raises_transfer_error_without_staging(tmp_path) -> None:
+    manager, state, _, chunks = transfer_data(tmp_path)
+    tampered = SnapshotChunk()
+    tampered.CopyFrom(chunks[0])
+    ciphertext = bytearray(tampered.encrypted_payload)
+    ciphertext[len(ciphertext) // 2] ^= 1
+    tampered.encrypted_payload = bytes(ciphertext)
+
+    with pytest.raises(TransferError, match="decryption failed"):
+        manager.receive(tampered)
+
+    assert state.received_chunk_numbers == set()
+    assert list((state.staging_dir / "chunks").glob("*.chunk")) == []

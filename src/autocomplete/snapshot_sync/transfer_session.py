@@ -7,6 +7,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+import tink
 from tink import streaming_aead
 
 from autocomplete.artifact_store import ArtifactStore, LocalArtifactStore
@@ -114,13 +115,18 @@ class TransferManager:
                 raise TransferError("chunk_number is outside transfer")
             if chunk.chunk_number in state.received_chunk_numbers:
                 return session.activated
-            plaintext = decrypt_chunk(
-                chunk.encrypted_payload,
-                session.primitive,
-                chunk.mission_id,
-                chunk.satellite_id,
-                chunk.snapshot_id,
-            )
+            try:
+                plaintext = decrypt_chunk(
+                    chunk.encrypted_payload,
+                    session.primitive,
+                    chunk.mission_id,
+                    chunk.satellite_id,
+                    chunk.snapshot_id,
+                )
+            except tink.TinkError as error:
+                raise TransferError(
+                    "chunk authentication or decryption failed"
+                ) from error
             try:
                 verify_plaintext_chunk(session.manifest, chunk.chunk_number, plaintext)
             except ManifestError as error:

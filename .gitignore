@@ -22,3 +22,7 @@ compile_commands.json
 
 logs/*.log
 logs/*.log.*
+.env
+.tink_keyset.json
+04_SECURE_SNAPSHOT_SYNC_SPEC.md
+05_INCIDENT_RETRIEVAL_SPEC.md

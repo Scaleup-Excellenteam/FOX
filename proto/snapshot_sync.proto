@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package autocomplete.snapshot_sync;
+
+message SnapshotChunk {
+  string mission_id = 1;
+  string satellite_id = 2;
+  string snapshot_id = 3;
+  uint32 chunk_number = 4;
+  uint32 total_chunks = 5;
+  bytes encrypted_payload = 6;
+}
+
+message SnapshotUpdateManifest {
+  string snapshot_id = 1;
+  string based_on_snapshot_id = 2;
+  uint64 corpus_version = 3;
+  int64 valid_until = 4;
+  repeated bytes chunk_hashes = 5;
+}

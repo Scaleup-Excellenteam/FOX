@@ -250,6 +250,20 @@ python -m ruff format --check .
 
 Latest validated implementation state: **522 Python tests passing**.
 
+## Secure Snapshot Sync Key Management
+
+Secure resumable snapshot delivery uses a Tink Streaming AEAD keyset. A real
+deployment supplies its serialized JSON keyset through the
+`TINK_KEYSET_JSON` environment variable; the value must come from the
+deployment's secret manager and must never be committed. A local
+`.tink_keyset.json` file is ignored for demo workflows, but production should
+not rely on a repository-local key file.
+
+Production deployments should protect the Tink data-encryption key with Google
+Cloud KMS. KMS integration and delta snapshot transfer are intentionally future
+work; the current implementation transfers a complete snapshot and keeps all
+test keysets ephemeral and test-only.
+
 Run the C++ tests after configuring and building:
 
 ```bash

@@ -29,6 +29,9 @@ class FakeIndex:
         self.exact_queries.append(normalized_query)
         return list(self.exact_candidate_ids)
 
+    def iter_exact_candidate_ids(self, normalized_query: str):
+        return iter(self.get_exact_candidate_ids(normalized_query))
+
 
 def make_record(
     sentence_id: int,

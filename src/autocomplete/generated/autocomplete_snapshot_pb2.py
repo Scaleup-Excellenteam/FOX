@@ -13,7 +13,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1b\x61utocomplete_snapshot.proto\x12\x18\x61utocomplete.snapshot.v1\"z\n\x13SentenceRecordProto\x12\x13\n\x0bsentence_id\x18\x01 \x01(\x04\x12\x10\n\x08original\x18\x02 \x01(\t\x12\x12\n\nnormalized\x18\x03 \x01(\t\x12\x13\n\x0bsource_path\x18\x04 \x01(\t\x12\x13\n\x0bline_number\x18\x05 \x01(\x04\"I\n\x10GramPostingProto\x12\x11\n\tgram_size\x18\x01 \x01(\r\x12\x0c\n\x04gram\x18\x02 \x01(\t\x12\x14\n\x0csentence_ids\x18\x03 \x03(\x04\"\xcd\x02\n\x15SnapshotManifestProto\x12\x16\n\x0eschema_version\x18\x01 \x01(\r\x12\x1d\n\x15normalization_version\x18\x02 \x01(\r\x12\x1e\n\x16index_strategy_version\x18\x03 \x01(\r\x12\x12\n\ngram_sizes\x18\x04 \x03(\r\x12\x1c\n\x14\x63orpus_digest_sha256\x18\x05 \x01(\t\x12\x13\n\x0bsnapshot_id\x18\x06 \x01(\t\x12\x16\n\x0e\x63reated_at_utc\x18\x07 \x01(\t\x12\x14\n\x0crecord_files\x18\x08 \x03(\t\x12\x13\n\x0bindex_files\x18\t \x03(\t\x12\x1f\n\x17searchable_record_count\x18\n \x01(\x04\x12\x15\n\rposting_count\x18\x0b \x01(\x04\x12\x1b\n\x13index_digest_sha256\x18\x0c \x01(\tb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1b\x61utocomplete_snapshot.proto\x12\x18\x61utocomplete.snapshot.v1\"z\n\x13SentenceRecordProto\x12\x13\n\x0bsentence_id\x18\x01 \x01(\x04\x12\x10\n\x08original\x18\x02 \x01(\t\x12\x12\n\nnormalized\x18\x03 \x01(\t\x12\x13\n\x0bsource_path\x18\x04 \x01(\t\x12\x13\n\x0bline_number\x18\x05 \x01(\x04\"I\n\x10GramPostingProto\x12\x11\n\tgram_size\x18\x01 \x01(\r\x12\x0c\n\x04gram\x18\x02 \x01(\t\x12\x14\n\x0csentence_ids\x18\x03 \x03(\x04\"u\n\x18PrecomputedGramTopKProto\x12\x11\n\tgram_size\x18\x01 \x01(\r\x12\x0c\n\x04gram\x18\x02 \x01(\t\x12\x1e\n\x16\x65xact_occurrence_count\x18\x03 \x01(\x04\x12\x18\n\x10top_sentence_ids\x18\x04 \x03(\x04\"\x97\x03\n\x15SnapshotManifestProto\x12\x16\n\x0eschema_version\x18\x01 \x01(\r\x12\x1d\n\x15normalization_version\x18\x02 \x01(\r\x12\x1e\n\x16index_strategy_version\x18\x03 \x01(\r\x12\x12\n\ngram_sizes\x18\x04 \x03(\r\x12\x1c\n\x14\x63orpus_digest_sha256\x18\x05 \x01(\t\x12\x13\n\x0bsnapshot_id\x18\x06 \x01(\t\x12\x16\n\x0e\x63reated_at_utc\x18\x07 \x01(\t\x12\x14\n\x0crecord_files\x18\x08 \x03(\t\x12\x13\n\x0bindex_files\x18\t \x03(\t\x12\x1f\n\x17searchable_record_count\x18\n \x01(\x04\x12\x15\n\rposting_count\x18\x0b \x01(\x04\x12\x1b\n\x13index_digest_sha256\x18\x0c \x01(\t\x12\x12\n\ntopk_files\x18\r \x03(\t\x12\x18\n\x10topk_entry_count\x18\x0e \x01(\x04\x12\x1a\n\x12topk_digest_sha256\x18\x0f \x01(\tb\x06proto3')
 
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, globals())
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'autocomplete_snapshot_pb2', globals())
@@ -24,6 +24,8 @@ if _descriptor._USE_C_DESCRIPTORS == False:
   _SENTENCERECORDPROTO._serialized_end=179
   _GRAMPOSTINGPROTO._serialized_start=181
   _GRAMPOSTINGPROTO._serialized_end=254
-  _SNAPSHOTMANIFESTPROTO._serialized_start=257
-  _SNAPSHOTMANIFESTPROTO._serialized_end=590
+  _PRECOMPUTEDGRAMTOPKPROTO._serialized_start=256
+  _PRECOMPUTEDGRAMTOPKPROTO._serialized_end=373
+  _SNAPSHOTMANIFESTPROTO._serialized_start=376
+  _SNAPSHOTMANIFESTPROTO._serialized_end=783
 # @@protoc_insertion_point(module_scope)

@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <vector>
 
 #include <google/protobuf/io/coded_stream.h>
@@ -30,10 +31,12 @@ namespace autocomplete::builder {
 namespace {
 
 constexpr std::size_t kMaximumPayloadBytes = 8U * 1024U * 1024U;
+constexpr std::size_t kDigestBufferBytes = 64U * 1024U;
 constexpr std::string_view kAsciiPunctuation =
     "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 constexpr std::string_view kRecordsFile = "records.binpb";
 constexpr std::string_view kIndexFile = "index.binpb";
+constexpr std::string_view kTopKFile = "gram_topk.binpb";
 constexpr std::string_view kManifestFile = "manifest.binpb";
 
 class Sha256 {
@@ -86,6 +89,49 @@ class Sha256 {
   EVP_MD_CTX* context_;
 };
 
+class BufferedDigest {
+ public:
+  explicit BufferedDigest(Sha256& digest) : digest_(digest) {
+    buffer_.reserve(kDigestBufferBytes);
+  }
+
+  BufferedDigest(const BufferedDigest&) = delete;
+  BufferedDigest& operator=(const BufferedDigest&) = delete;
+
+  void update(std::string_view value) {
+    while (!value.empty()) {
+      const std::size_t available = kDigestBufferBytes - buffer_.size();
+      const std::size_t count = std::min(available, value.size());
+      buffer_.append(value.data(), count);
+      value.remove_prefix(count);
+      if (buffer_.size() == kDigestBufferBytes) {
+        flush();
+      }
+    }
+  }
+
+  void update(const std::array<unsigned char, 8>& value) {
+    update_bytes(value.data(), value.size());
+  }
+
+  void update(const std::array<unsigned char, 4>& value) {
+    update_bytes(value.data(), value.size());
+  }
+
+  void flush() {
+    digest_.update(buffer_);
+    buffer_.clear();
+  }
+
+ private:
+  void update_bytes(const unsigned char* data, std::size_t size) {
+    update(std::string_view(reinterpret_cast<const char*>(data), size));
+  }
+
+  Sha256& digest_;
+  std::string buffer_;
+};
+
 std::array<unsigned char, 8> u64_be(std::uint64_t value) {
   std::array<unsigned char, 8> bytes{};
   for (std::size_t index = 0; index < bytes.size(); ++index) {
@@ -106,7 +152,7 @@ std::array<unsigned char, 4> u32_be(std::uint32_t value) {
   return bytes;
 }
 
-void update_string(Sha256& digest, std::string_view value) {
+void update_string(BufferedDigest& digest, std::string_view value) {
   digest.update(u64_be(value.size()));
   digest.update(value);
 }
@@ -252,6 +298,46 @@ struct CorpusRecord {
   std::string normalized;
 };
 
+struct RankedRecord {
+  std::uint32_t sentence_id;
+  std::string completed_sentence;
+  std::string source_text;
+  std::uint64_t offset;
+};
+
+struct GramData {
+  std::vector<std::uint32_t> sentence_ids;
+  std::vector<RankedRecord> top_records;
+};
+
+using GramDataMap = std::map<GramKey, GramData>;
+
+void consider_for_top_k(std::vector<RankedRecord>& top,
+                        const CorpusRecord& record) {
+  const auto candidate_key =
+      std::tie(record.original, record.source_path, record.line_number);
+  if (top.size() == 5U) {
+    const RankedRecord& worst = top.back();
+    const auto worst_key =
+        std::tie(worst.completed_sentence, worst.source_text, worst.offset);
+    if (!(candidate_key < worst_key)) {
+      return;
+    }
+  }
+  const auto position = std::find_if(
+      top.begin(), top.end(), [&](const RankedRecord& existing) {
+        return candidate_key < std::tie(existing.completed_sentence,
+                                        existing.source_text, existing.offset);
+      });
+  RankedRecord candidate{static_cast<std::uint32_t>(record.sentence_id),
+                         record.original, record.source_path,
+                         record.line_number};
+  top.insert(position, std::move(candidate));
+  if (top.size() > 5U) {
+    top.pop_back();
+  }
+}
+
 using RecordConsumer = std::function<void(const CorpusRecord&)>;
 
 CorpusInspection scan_corpus(const fs::path& root,
@@ -262,6 +348,7 @@ CorpusInspection scan_corpus(const fs::path& root,
 
   const auto files = discover_files(root);
   Sha256 corpus_digest;
+  BufferedDigest buffered_corpus_digest(corpus_digest);
   std::uint64_t line_count = 0;
   std::uint64_t skipped_count = 0;
   std::uint64_t sentence_id = 0;
@@ -302,11 +389,11 @@ CorpusInspection scan_corpus(const fs::path& root,
       ++sentence_id;
 
       CorpusRecord record{sentence_id, relative, line_number, line, normalized};
-      corpus_digest.update(u64_be(record.sentence_id));
-      update_string(corpus_digest, record.source_path);
-      corpus_digest.update(u64_be(record.line_number));
-      update_string(corpus_digest, record.original);
-      update_string(corpus_digest, record.normalized);
+      buffered_corpus_digest.update(u64_be(record.sentence_id));
+      update_string(buffered_corpus_digest, record.source_path);
+      buffered_corpus_digest.update(u64_be(record.line_number));
+      update_string(buffered_corpus_digest, record.original);
+      update_string(buffered_corpus_digest, record.normalized);
       consume_record(record);
     }
     if (input.bad()) {
@@ -314,6 +401,7 @@ CorpusInspection scan_corpus(const fs::path& root,
     }
   }
 
+  buffered_corpus_digest.flush();
   return CorpusInspection{corpus_digest.finish_hex(), files.size(), line_count,
                           sentence_id, skipped_count};
 }
@@ -431,7 +519,7 @@ int build_snapshot(const fs::path& corpus_root,
   }
   StagingGuard staging_guard(staging);
   FramedWriter records_writer(staging / kRecordsFile);
-  PostingMap postings;
+  GramDataMap grams;
   const CorpusInspection inspection = scan_corpus(
       root, [&](const CorpusRecord& corpus_record) {
         ::autocomplete::snapshot::v1::SentenceRecordProto record;
@@ -445,8 +533,11 @@ int build_snapshot(const fs::path& corpus_root,
         for (std::uint32_t size = 1; size <= 3; ++size) {
           for (const std::string& gram :
                character_grams(corpus_record.normalized, size)) {
-            postings[{size, gram}].push_back(
+            const GramKey key{size, gram};
+            GramData& data = grams[key];
+            data.sentence_ids.push_back(
                 static_cast<std::uint32_t>(corpus_record.sentence_id));
+            consider_for_top_k(data.top_records, corpus_record);
           }
         }
       });
@@ -454,8 +545,10 @@ int build_snapshot(const fs::path& corpus_root,
 
   FramedWriter index_writer(staging / kIndexFile);
   Sha256 index_digest;
+  BufferedDigest buffered_index_digest(index_digest);
   std::uint64_t posting_entries = 0;
-  for (const auto& [key, ids] : postings) {
+  for (const auto& [key, data] : grams) {
+    const std::vector<std::uint32_t>& ids = data.sentence_ids;
     ::autocomplete::snapshot::v1::GramPostingProto posting;
     posting.set_gram_size(key.first);
     posting.set_gram(key.second);
@@ -463,29 +556,60 @@ int build_snapshot(const fs::path& corpus_root,
       posting.add_sentence_ids(id);
     }
     index_writer.write(posting);
-    index_digest.update(u32_be(key.first));
-    update_string(index_digest, key.second);
-    index_digest.update(u64_be(ids.size()));
+    buffered_index_digest.update(u32_be(key.first));
+    update_string(buffered_index_digest, key.second);
+    buffered_index_digest.update(u64_be(ids.size()));
     for (const std::uint32_t id : ids) {
-      index_digest.update(u64_be(id));
+      buffered_index_digest.update(u64_be(id));
     }
     posting_entries += ids.size();
   }
   index_writer.close();
 
+  FramedWriter topk_writer(staging / kTopKFile);
+  Sha256 topk_digest;
+  BufferedDigest buffered_topk_digest(topk_digest);
+  for (const auto& [key, data] : grams) {
+    const std::vector<std::uint32_t>& ids = data.sentence_ids;
+    const std::vector<RankedRecord>& top = data.top_records;
+    if (top.empty()) {
+      throw std::runtime_error("missing precomputed Top-K entry");
+    }
+    ::autocomplete::snapshot::v1::PrecomputedGramTopKProto value;
+    value.set_gram_size(key.first);
+    value.set_gram(key.second);
+    value.set_exact_occurrence_count(ids.size());
+    for (const RankedRecord& record : top) {
+      value.add_top_sentence_ids(record.sentence_id);
+    }
+    topk_writer.write(value);
+    buffered_topk_digest.update(u32_be(key.first));
+    update_string(buffered_topk_digest, key.second);
+    buffered_topk_digest.update(u64_be(ids.size()));
+    buffered_topk_digest.update(u64_be(top.size()));
+    for (const RankedRecord& record : top) {
+      buffered_topk_digest.update(u64_be(record.sentence_id));
+    }
+  }
+  topk_writer.close();
+
   const std::string& corpus_hex = inspection.corpus_digest_sha256;
+  buffered_index_digest.flush();
   const std::string index_hex = index_digest.finish_hex();
+  buffered_topk_digest.flush();
+  const std::string topk_hex = topk_digest.finish_hex();
   const std::string identity =
       "corpus_digest_sha256=" + corpus_hex + "\n" +
       "index_digest_sha256=" + index_hex + "\n" +
+      "topk_digest_sha256=" + topk_hex + "\n" +
       "schema_version=1\nnormalization_version=1\n" +
-      "index_strategy_version=1\ngram_sizes=1,2,3\n";
+      "index_strategy_version=2\ngram_sizes=1,2,3\n";
   const std::string snapshot_id = sha256_hex(identity);
 
   ::autocomplete::snapshot::v1::SnapshotManifestProto manifest;
   manifest.set_schema_version(1);
   manifest.set_normalization_version(1);
-  manifest.set_index_strategy_version(1);
+  manifest.set_index_strategy_version(2);
   for (const std::uint32_t size : {1U, 2U, 3U}) {
     manifest.add_gram_sizes(size);
   }
@@ -495,8 +619,11 @@ int build_snapshot(const fs::path& corpus_root,
   manifest.add_record_files(std::string(kRecordsFile));
   manifest.add_index_files(std::string(kIndexFile));
   manifest.set_searchable_record_count(inspection.searchable_record_count);
-  manifest.set_posting_count(postings.size());
+  manifest.set_posting_count(grams.size());
   manifest.set_index_digest_sha256(index_hex);
+  manifest.add_topk_files(std::string(kTopKFile));
+  manifest.set_topk_entry_count(grams.size());
+  manifest.set_topk_digest_sha256(topk_hex);
   write_file(staging / kManifestFile, serialize_deterministically(manifest));
 
   fs::rename(staging, output);
@@ -508,7 +635,7 @@ int build_snapshot(const fs::path& corpus_root,
             << " lines=" << inspection.line_count
             << " accepted=" << inspection.searchable_record_count
             << " skipped=" << inspection.skipped_record_count
-            << " grams=" << postings.size()
+            << " grams=" << grams.size()
             << " posting_ids=" << posting_entries
             << " elapsed_seconds=" << std::fixed << std::setprecision(3)
             << elapsed.count() << " output=" << output.string()

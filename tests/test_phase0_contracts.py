@@ -33,6 +33,7 @@ def test_generated_protobuf_package_and_messages_match_frozen_schema() -> None:
     assert set(descriptor.message_types_by_name) == {
         "SentenceRecordProto",
         "GramPostingProto",
+        "PrecomputedGramTopKProto",
         "SnapshotManifestProto",
     }
 
@@ -73,6 +74,33 @@ def test_snapshot_manifest_proto_fields_match_frozen_schema() -> None:
         ("searchable_record_count", 10, FieldDescriptor.TYPE_UINT64),
         ("posting_count", 11, FieldDescriptor.TYPE_UINT64),
         ("index_digest_sha256", 12, FieldDescriptor.TYPE_STRING),
+        ("topk_files", 13, FieldDescriptor.TYPE_STRING),
+        ("topk_entry_count", 14, FieldDescriptor.TYPE_UINT64),
+        ("topk_digest_sha256", 15, FieldDescriptor.TYPE_STRING),
     ]
-    for field_name in ("gram_sizes", "record_files", "index_files"):
+    for field_name in ("gram_sizes", "record_files", "index_files", "topk_files"):
         assert descriptor.fields_by_name[field_name].is_repeated
+
+
+def test_precomputed_gram_top_k_proto_fields_match_v2_schema() -> None:
+    descriptor = autocomplete_snapshot_pb2.PrecomputedGramTopKProto.DESCRIPTOR
+    assert [(field.name, field.number, field.type) for field in descriptor.fields] == [
+        ("gram_size", 1, FieldDescriptor.TYPE_UINT32),
+        ("gram", 2, FieldDescriptor.TYPE_STRING),
+        ("exact_occurrence_count", 3, FieldDescriptor.TYPE_UINT64),
+        ("top_sentence_ids", 4, FieldDescriptor.TYPE_UINT64),
+    ]
+    assert descriptor.fields_by_name["top_sentence_ids"].is_repeated
+
+
+def test_precomputed_gram_top_k_proto_round_trip() -> None:
+    original = autocomplete_snapshot_pb2.PrecomputedGramTopKProto(
+        gram_size=2,
+        gram="to",
+        exact_occurrence_count=482_616,
+        top_sentence_ids=[9, 3, 17, 4, 11],
+    )
+    restored = autocomplete_snapshot_pb2.PrecomputedGramTopKProto()
+    restored.ParseFromString(original.SerializeToString(deterministic=True))
+
+    assert restored == original

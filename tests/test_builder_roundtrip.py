@@ -85,6 +85,7 @@ def test_completely_empty_corpus_builds_loads_and_searches(builder, tmp_path):
         "manifest.binpb",
         "records.binpb",
         "index.binpb",
+        "gram_topk.binpb",
     }
     manifest = SnapshotManifestProto()
     manifest.ParseFromString((snapshot / "manifest.binpb").read_bytes())

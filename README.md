@@ -20,7 +20,7 @@ Corpus ZIP or directory
 C++ autocomplete_builder
         |
         v
-records.binpb + index.binpb + manifest.binpb
+records.binpb + index.binpb + gram_topk.binpb + manifest.binpb
         |
         v
 load_snapshot()
@@ -169,7 +169,8 @@ atomically publishes:
 data/snapshots/manual/
 |-- manifest.binpb
 |-- records.binpb
-`-- index.binpb
+|-- index.binpb
+`-- gram_topk.binpb
 ```
 
 For an already extracted corpus directory, the C++ executable can also be

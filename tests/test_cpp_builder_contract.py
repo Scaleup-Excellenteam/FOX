@@ -58,10 +58,25 @@ def test_production_builder_corpus_contract(builder, tmp_path):
         manifest.schema_version,
         manifest.normalization_version,
         manifest.index_strategy_version,
-    ) == (1, 1, 1)
+    ) == (1, 1, 2)
     assert list(manifest.gram_sizes) == [1, 2, 3]
     assert manifest.searchable_record_count == 3
     assert manifest.posting_count == len(index.postings)
+    assert list(manifest.topk_files) == ["gram_topk.binpb"]
+    assert manifest.topk_entry_count == len(index.postings)
+    precomputed = index.get_precomputed_exact_top_k("l")
+    assert precomputed is not None
+    assert precomputed.exact_occurrence_count == len(index.postings[(1, "l")])
+    expected = sorted(
+        index.postings[(1, "l")],
+        key=lambda sentence_id: (
+            records[sentence_id].original,
+            records[sentence_id].source_path,
+            records[sentence_id].line_number,
+            sentence_id,
+        ),
+    )[:5]
+    assert list(precomputed.sentence_ids) == expected
 
 
 def test_production_builder_is_byte_deterministic(builder, tmp_path):

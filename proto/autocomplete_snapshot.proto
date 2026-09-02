@@ -16,6 +16,13 @@ message GramPostingProto {
   repeated uint64 sentence_ids = 3;
 }
 
+message PrecomputedGramTopKProto {
+  uint32 gram_size = 1;
+  string gram = 2;
+  uint64 exact_occurrence_count = 3;
+  repeated uint64 top_sentence_ids = 4;
+}
+
 message SnapshotManifestProto {
   uint32 schema_version = 1;
   uint32 normalization_version = 2;
@@ -29,4 +36,7 @@ message SnapshotManifestProto {
   uint64 searchable_record_count = 10;
   uint64 posting_count = 11;
   string index_digest_sha256 = 12;
+  repeated string topk_files = 13;
+  uint64 topk_entry_count = 14;
+  string topk_digest_sha256 = 15;
 }

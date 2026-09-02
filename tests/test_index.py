@@ -76,6 +76,46 @@ def test_exact_candidates_validate_type():
 @pytest.mark.parametrize(
     ("query", "expected"),
     [
+        ("", []),
+        ("to", [1, 2, 6]),
+        ("to be", [1, 6]),
+        ("abcdefghi", [5]),
+        ("not present", []),
+    ],
+)
+def test_exact_candidate_iterator_intersects_the_full_query(query, expected):
+    assert list(index().iter_exact_candidate_ids(query)) == expected
+
+
+def test_exact_candidate_iterator_only_claims_candidates_not_substrings():
+    idx = build_index({1: "abc xx bcd", 2: "continuous abcd"})
+
+    assert list(idx.iter_exact_candidate_ids("abcd")) == [1, 2]
+
+
+def test_exact_candidate_iterator_validates_type_eagerly():
+    with pytest.raises(TypeError, match="string"):
+        index().iter_exact_candidate_ids(None)
+
+
+def test_exact_top_k_planner_aborts_when_intersection_cannot_fill_minimum():
+    idx = build_index(
+        {
+            1: "abc xx bcd",
+            2: "continuous abcd",
+            3: "abc only",
+            4: "bcd only",
+        }
+    )
+
+    assert list(idx.iter_exact_candidate_ids("abcd")) == [1, 2]
+    assert list(idx.iter_exact_candidate_ids_if_at_least("abcd", 3)) == []
+    assert list(idx.iter_exact_candidate_ids_if_at_least("abcd", 2)) == [1, 2]
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
         ("to", [1, 2, 3, 6]),  # 1 + 1
         ("to ", [1, 2, 6]),  # 1 + 2
         ("to b", [1, 2, 6]),  # 2 + 2

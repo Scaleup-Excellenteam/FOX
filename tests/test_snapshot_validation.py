@@ -1,3 +1,4 @@
+import hashlib
 import shutil
 import struct
 import subprocess
@@ -6,10 +7,11 @@ import pytest
 
 from autocomplete.generated.autocomplete_snapshot_pb2 import (
     GramPostingProto,
+    PrecomputedGramTopKProto,
     SentenceRecordProto,
     SnapshotManifestProto,
 )
-from autocomplete.snapshot_loader import SnapshotError, load_snapshot
+from autocomplete.snapshot_loader import SnapshotError, _BufferedDigest, load_snapshot
 
 
 def build(builder, tmp_path):
@@ -56,6 +58,51 @@ def write_messages(path, values):
         output.extend(struct.pack(">I", len(payload)))
         output.extend(payload)
     path.write_bytes(output)
+
+
+def topk_digest(values):
+    digest = hashlib.sha256()
+    buffered = _BufferedDigest(digest)
+    for value in values:
+        buffered.update_u32(value.gram_size)
+        buffered.update_string(value.gram)
+        buffered.update_u64(value.exact_occurrence_count)
+        buffered.update_u64(len(value.top_sentence_ids))
+        buffered.update_u64s(value.top_sentence_ids)
+    buffered.flush()
+    return digest.hexdigest()
+
+
+def test_buffered_digest_preserves_canonical_bytes_and_is_bounded():
+    class RecordingDigest:
+        def __init__(self):
+            self.chunks = []
+
+        def update(self, value):
+            self.chunks.append(bytes(value))
+
+    recorder = RecordingDigest()
+    buffered = _BufferedDigest(recorder, capacity=32)
+    buffered.update_u32(3)
+    buffered.update_string("héllo")
+    buffered.update_u64s(list(range(20)))
+    buffered.flush()
+
+    encoded = "héllo".encode()
+    expected = b"".join(
+        [
+            struct.pack(">I", 3),
+            struct.pack(">Q", len(encoded)),
+            encoded,
+            *(struct.pack(">Q", value) for value in range(20)),
+        ]
+    )
+    assert b"".join(recorder.chunks) == expected
+    assert all(len(chunk) <= 32 for chunk in recorder.chunks)
+    assert (
+        hashlib.sha256(b"".join(recorder.chunks)).digest()
+        == hashlib.sha256(expected).digest()
+    )
 
 
 @pytest.mark.parametrize(
@@ -121,6 +168,58 @@ def test_corrupt_and_missing_manifest(tmp_path):
     (snapshot / "manifest.binpb").write_bytes(b"\xff")
     with pytest.raises(SnapshotError, match="corrupt manifest"):
         load_snapshot(snapshot)
+
+
+def test_v2_top_k_artifact_failure_modes(builder, tmp_path):
+    missing = build(builder, tmp_path / "missing-topk")
+    value = manifest(missing)
+    (missing / value.topk_files[0]).unlink()
+    with pytest.raises(SnapshotError, match="cannot read snapshot file"):
+        load_snapshot(missing)
+
+    unsafe = build(builder, tmp_path / "unsafe-topk")
+    value = manifest(unsafe)
+    value.topk_files[0] = "../gram_topk.binpb"
+    write_manifest(unsafe, value)
+    with pytest.raises(SnapshotError, match="unsafe snapshot"):
+        load_snapshot(unsafe)
+
+    truncated = build(builder, tmp_path / "truncated-topk")
+    value = manifest(truncated)
+    path = truncated / value.topk_files[0]
+    path.write_bytes(path.read_bytes()[:-1])
+    with pytest.raises(SnapshotError, match="truncated frame"):
+        load_snapshot(truncated)
+
+    duplicate = build(builder, tmp_path / "duplicate-topk")
+    value = manifest(duplicate)
+    path = duplicate / value.topk_files[0]
+    first = messages(path, PrecomputedGramTopKProto)[0]
+    payload = first.SerializeToString(deterministic=True)
+    with path.open("ab") as stream:
+        stream.write(struct.pack(">I", len(payload)))
+        stream.write(payload)
+    with pytest.raises(SnapshotError, match="invalid precomputed Top-K"):
+        load_snapshot(duplicate)
+
+    corrupt = build(builder, tmp_path / "corrupt-topk")
+    value = manifest(corrupt)
+    value.topk_digest_sha256 = "0" * 64
+    write_manifest(corrupt, value)
+    with pytest.raises(SnapshotError, match="Top-K digest mismatch"):
+        load_snapshot(corrupt)
+
+    misordered = build(builder, tmp_path / "misordered-topk")
+    value = manifest(misordered)
+    path = misordered / value.topk_files[0]
+    entries = messages(path, PrecomputedGramTopKProto)
+    target = next(entry for entry in entries if len(entry.top_sentence_ids) > 1)
+    target.top_sentence_ids.reverse()
+    write_messages(path, entries)
+    value.topk_digest_sha256 = topk_digest(entries)
+    write_manifest(misordered, value)
+    with pytest.raises(SnapshotError, match="Top-K ordering"):
+        load_snapshot(misordered)
 
 
 def test_duplicate_and_zero_record_ids_are_rejected(builder, tmp_path):

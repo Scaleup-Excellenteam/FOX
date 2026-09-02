@@ -19,3 +19,5 @@ compile_commands.json
 !/data/snapshots/.gitkeep
 
 /artifacts/
+.env
+.tink_keyset.json

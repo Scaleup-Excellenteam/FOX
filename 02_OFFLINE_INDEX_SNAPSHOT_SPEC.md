@@ -243,6 +243,29 @@ Python loader rejects:
 
 Do not serve a partially loaded snapshot.
 
+### Snapshot V2 exact Top-K extension
+
+Index strategy version 2 adds `gram_topk.binpb`, a framed stream of
+`PrecomputedGramTopKProto` messages. The manifest discovers and protects this
+artifact through `topk_files`, `topk_entry_count`, and
+`topk_digest_sha256`; an implicit filename is never used. Every 1/2/3-gram
+posting has exactly one entry containing its exact occurrence count and up to
+five sentence IDs ordered by completed sentence, source path, line offset, and
+stable sentence-ID encounter order.
+
+Compatibility is explicit:
+
+- A current loader accepts an index-strategy-V1 manifest only when all Top-K
+  fields declare the artifact absent, then uses the legacy exact/fuzzy path.
+- A current loader requires the complete Top-K declaration for V2 and rejects
+  a missing, duplicate, unsafe, truncated, corrupt, misordered, or
+  integrity-mismatched artifact before returning an index.
+- A V1 loader rejects V2 through the index strategy version check.
+
+The V2 snapshot identity adds `topk_digest_sha256` to the canonical identity
+block and sets `index_strategy_version=2`. Schema and normalization versions
+remain 1; V1 record and posting artifacts retain their existing encoding.
+
 ## 11. Stable Corpus Digest, Index Digest and Snapshot ID
 
 Do **not** hash serialized protobuf bytes as the long-lived identity. Protobuf serialization is not canonical.

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import random
+import string
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 
 import pytest
 
 import autocomplete.search_engine as search_engine_module
-from autocomplete.index import SearchIndex
+from autocomplete.index import FrozenPosting, PrecomputedExactTopK, SearchIndex
 from autocomplete.models import SentenceRecord
 from autocomplete.normalization import normalize
 from autocomplete.reference_engine import ReferenceEngine
@@ -20,10 +22,23 @@ class TrackingIndex:
         self.reject_fuzzy = reject_fuzzy
         self.exact_queries: list[str] = []
         self.fuzzy_queries: list[str] = []
+        self.precomputed_queries: list[str] = []
 
     def get_exact_candidate_ids(self, query: str) -> Sequence[int]:
         self.exact_queries.append(query)
         return self._index.get_exact_candidate_ids(query)
+
+    def iter_exact_candidate_ids(self, query: str):
+        self.exact_queries.append(query)
+        return self._index.iter_exact_candidate_ids(query)
+
+    def iter_exact_candidate_ids_if_at_least(self, query: str, minimum_count: int):
+        self.exact_queries.append(query)
+        return self._index.iter_exact_candidate_ids_if_at_least(query, minimum_count)
+
+    def get_precomputed_exact_top_k(self, query: str):
+        self.precomputed_queries.append(query)
+        return self._index.get_precomputed_exact_top_k(query)
 
     def get_candidate_ids(self, query: str) -> list[int]:
         self.fuzzy_queries.append(query)
@@ -72,6 +87,7 @@ def engines(
     records: list[SentenceRecord],
     *,
     reject_fuzzy: bool = False,
+    measure_exact_path: bool = False,
 ) -> tuple[SearchEngine, ReferenceEngine, TrackingIndex]:
     records_by_id = {record.sentence_id: record for record in records}
     tracking_index = TrackingIndex(
@@ -79,7 +95,11 @@ def engines(
         reject_fuzzy=reject_fuzzy,
     )
     return (
-        SearchEngine(records_by_id, tracking_index),
+        SearchEngine(
+            records_by_id,
+            tracking_index,
+            measure_exact_path=measure_exact_path,
+        ),
         ReferenceEngine(records_by_id),
         tracking_index,
     )
@@ -129,7 +149,10 @@ def test_exactly_five_exact_matches_skip_fuzzy_generation_and_matching(
         make_record(identifier, f"exact ab {identifier}") for identifier in range(1, 6)
     ]
     records.append(make_record(6, "fuzzy ac", normalized="ac"))
-    indexed, reference, index = engines(records, reject_fuzzy=True)
+    indexed, reference, index = engines(
+        records,
+        reject_fuzzy=True,
+    )
     monkeypatch.setattr(
         search_engine_module,
         "_match_and_score",
@@ -152,7 +175,10 @@ def test_complete_exact_posting_is_scanned_and_late_best_result_wins(
         make_record(identifier, f"z{identifier} {query}") for identifier in range(1, 7)
     ]
     records.append(make_record(7, f"alpha {query}"))
-    indexed, reference, index = engines(records, reject_fuzzy=True)
+    indexed, reference, index = engines(
+        records,
+        reject_fuzzy=True,
+    )
 
     actual = indexed.search(query)
 
@@ -231,7 +257,7 @@ def test_exact_first_preserves_k_behavior(k: int) -> None:
 
 
 @pytest.mark.parametrize("query", ["function", "configuration", "to be"])
-def test_queries_longer_than_three_keep_existing_fuzzy_safe_path(query: str) -> None:
+def test_long_queries_with_fewer_than_five_exact_matches_fall_back(query: str) -> None:
     records = [
         make_record(1, f"exact {query}"),
         make_record(2, f"another exact {query}"),
@@ -242,5 +268,168 @@ def test_queries_longer_than_three_keep_existing_fuzzy_safe_path(query: str) -> 
     actual = indexed.search(query)
 
     assert actual == reference.search(query)
-    assert index.exact_queries == []
+    assert index.exact_queries == [query]
     assert index.fuzzy_queries == [query]
+
+
+@pytest.mark.parametrize("query", ["abcd", "to be", "configuration"])
+def test_long_queries_with_five_exact_matches_skip_fuzzy_path(query: str) -> None:
+    records = [
+        make_record(identifier, f"exact {query} {identifier}")
+        for identifier in range(1, 7)
+    ]
+    indexed, reference, index = engines(
+        records,
+        reject_fuzzy=True,
+        measure_exact_path=True,
+    )
+
+    assert indexed.search(query) == reference.search(query)
+    assert index.exact_queries == [query]
+    assert index.fuzzy_queries == []
+    assert indexed.last_exact_metrics.substring_checks == 6
+
+
+def test_v2_short_query_uses_only_precomputed_ordered_top_five(monkeypatch) -> None:
+    records = [
+        make_record(identifier, f"{letter} to", source_path=f"{letter}.txt")
+        for identifier, letter in enumerate("gfedcba", start=1)
+    ]
+    records_by_id = {record.sentence_id: record for record in records}
+    base = build_index(records)
+    expected_ids = tuple(
+        record.sentence_id
+        for record in sorted(
+            records,
+            key=lambda record: (
+                record.original,
+                record.source_path,
+                record.line_number,
+                record.sentence_id,
+            ),
+        )[:5]
+    )
+    index = SearchIndex(
+        base.postings,
+        base.all_sentence_ids,
+        {(2, "to"): PrecomputedExactTopK(7, FrozenPosting(expected_ids))},
+    )
+    tracking = TrackingIndex(index, reject_fuzzy=True)
+    engine = SearchEngine(records_by_id, tracking, measure_exact_path=True)
+
+    monkeypatch.setattr(
+        search_engine_module,
+        "_match_and_score",
+        lambda *_: pytest.fail("matcher was not expected"),
+    )
+
+    assert engine.search("to") == ReferenceEngine(records_by_id).search("to")
+    assert tracking.precomputed_queries == ["to"]
+    assert tracking.exact_queries == []
+    assert engine.last_exact_metrics.records_examined == 5
+    assert engine.last_exact_metrics.result_allocations == 5
+
+
+def result_tuples(results):
+    return [
+        (item.completed_sentence, item.source_text, item.offset, item.score)
+        for item in results
+    ]
+
+
+@pytest.mark.parametrize(
+    ("target", "query"),
+    [
+        ("abcdefgh", "xbcdefgh"),  # substitution, left
+        ("abcdefgh", "abcdxfgh"),  # substitution, boundary
+        ("abcdefgh", "abcdefgx"),  # substitution, right
+        ("abcdefgh", "bcdefgh"),  # missing query character, left
+        ("abcdefgh", "abcdfgh"),  # missing query character, boundary
+        ("abcdefgh", "abcdefg"),  # missing query character, right
+        ("abcdefgh", "xabcdefgh"),  # extra query character, left
+        ("abcdefgh", "abcdxefgh"),  # extra query character, boundary
+        ("abcdefgh", "abcdefghx"),  # extra query character, right
+    ],
+)
+def test_one_edit_differential_across_partitions(target: str, query: str) -> None:
+    records = [
+        make_record(1, f"prefix {target} suffix"),
+        make_record(2, "unrelated noise"),
+    ]
+    indexed, reference, _ = engines(records)
+
+    assert result_tuples(indexed.search(query)) == result_tuples(
+        reference.search(query)
+    )
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "",
+        "qzxqzxqzx",
+        "A-B!!",
+        "שלום",
+        "ÉCOLE",
+        "one",
+        "on",
+        "o",
+    ],
+)
+def test_normalization_unicode_short_empty_and_no_result_differential(
+    query: str,
+) -> None:
+    records = [
+        make_record(1, "Alpha AB punctuation"),
+        make_record(2, "שלום עולם"),
+        make_record(3, "ÉCOLE stays Unicode-case-sensitive"),
+        make_record(4, "one two three", source_path="b.txt", line_number=7),
+        make_record(5, "one two three", source_path="a.txt", line_number=7),
+        make_record(6, "one two three", source_path="a.txt", line_number=7),
+    ]
+    indexed, reference, _ = engines(records)
+
+    assert result_tuples(indexed.search(query)) == result_tuples(
+        reference.search(query)
+    )
+
+
+def test_seeded_randomized_complete_result_tuple_equivalence() -> None:
+    rng = random.Random(20260901)
+    alphabet = string.ascii_lowercase + " -!?éשלום"
+    for corpus_number in range(20):
+        records = []
+        for sentence_id in range(1, 31):
+            text = "".join(rng.choice(alphabet) for _ in range(rng.randint(4, 24)))
+            records.append(
+                make_record(
+                    sentence_id,
+                    text,
+                    source_path=f"source-{rng.randrange(4)}.txt",
+                    line_number=rng.randrange(1, 10),
+                )
+            )
+        indexed, reference, _ = engines(records)
+        normalized_sentences = [record.normalized for record in records]
+        queries = ["", "qzxqzx"]
+        for _ in range(30):
+            sentence = rng.choice(normalized_sentences)
+            if not sentence:
+                continue
+            start = rng.randrange(len(sentence))
+            end = rng.randrange(start + 1, min(len(sentence), start + 10) + 1)
+            query = sentence[start:end]
+            operation = rng.randrange(4)
+            position = rng.randrange(len(query))
+            if operation == 1:
+                query = query[:position] + "x" + query[position + 1 :]
+            elif operation == 2:
+                query = query[:position] + query[position + 1 :]
+            elif operation == 3:
+                query = query[:position] + "x" + query[position:]
+            queries.append(query)
+
+        for query in queries:
+            assert result_tuples(indexed.search(query)) == result_tuples(
+                reference.search(query)
+            ), (corpus_number, query)

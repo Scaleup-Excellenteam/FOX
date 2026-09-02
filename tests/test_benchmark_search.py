@@ -34,6 +34,9 @@ class FakeIndex:
     def get_exact_candidate_ids(self, normalized_query: str) -> list[int]:
         return []
 
+    def iter_exact_candidate_ids(self, normalized_query: str):
+        return iter(self.get_exact_candidate_ids(normalized_query))
+
 
 class DurationTimer:
     """A deterministic timer that advances by one supplied duration per region."""

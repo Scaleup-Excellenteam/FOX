@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from array import array
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 
 
@@ -58,6 +59,12 @@ class FrozenPosting(Sequence[int]):
 
 
 _EMPTY_POSTING = FrozenPosting()
+
+
+@dataclass(frozen=True, slots=True)
+class PrecomputedExactTopK:
+    exact_occurrence_count: int
+    sentence_ids: FrozenPosting
 
 
 def _intersect_sorted(left: Sequence[int], right: Sequence[int]) -> PostingArray:
@@ -182,17 +189,24 @@ def _iter_union_sorted(
 class SearchIndex:
     """Immutable compact 1/2/3-character postings for recall-safe candidates."""
 
-    __slots__ = ("_postings", "_postings_view", "_all_sentence_ids")
+    __slots__ = (
+        "_all_sentence_ids",
+        "_exact_top_k",
+        "_postings",
+        "_postings_view",
+    )
 
     def __init__(
         self,
         postings: Mapping[tuple[int, str], Iterable[int]],
         all_sentence_ids: Iterable[int],
+        exact_top_k: Mapping[tuple[int, str], PrecomputedExactTopK] | None = None,
     ) -> None:
         self._postings = {
             key: FrozenPosting(sorted(set(ids))) for key, ids in postings.items()
         }
         self._all_sentence_ids = FrozenPosting(sorted(set(all_sentence_ids)))
+        self._exact_top_k = dict(exact_top_k or {})
         self._postings_view = MappingProxyType(self._postings)
 
     @classmethod
@@ -200,11 +214,13 @@ class SearchIndex:
         cls,
         postings: Mapping[tuple[int, str], Iterable[int]],
         all_sentence_ids: Iterable[int],
+        exact_top_k: Mapping[tuple[int, str], PrecomputedExactTopK] | None = None,
     ) -> SearchIndex:
         """Construct from loader-validated sorted, unique uint32 sequences."""
         instance = cls.__new__(cls)
         instance._postings = {key: FrozenPosting(ids) for key, ids in postings.items()}
         instance._all_sentence_ids = FrozenPosting(all_sentence_ids)
+        instance._exact_top_k = dict(exact_top_k or {})
         instance._postings_view = MappingProxyType(instance._postings)
         return instance
 
@@ -266,3 +282,58 @@ class SearchIndex:
             (len(normalized_query), normalized_query),
             _EMPTY_POSTING,
         )
+
+    def get_precomputed_exact_top_k(
+        self, normalized_query: str
+    ) -> PrecomputedExactTopK | None:
+        if not isinstance(normalized_query, str):
+            raise TypeError("normalized_query must be a string")
+        if not 1 <= len(normalized_query) <= 3:
+            return None
+        return self._exact_top_k.get((len(normalized_query), normalized_query))
+
+    def iter_exact_candidate_ids(self, normalized_query: str) -> Iterator[int]:
+        """Yield recall-safe candidates for an exact full-query substring."""
+
+        return self._iter_exact_candidate_ids(normalized_query, minimum_count=0)
+
+    def iter_exact_candidate_ids_if_at_least(
+        self, normalized_query: str, minimum_count: int
+    ) -> Iterator[int]:
+        """Yield exact candidates only while they can still fill Top-K."""
+
+        if isinstance(minimum_count, bool) or not isinstance(minimum_count, int):
+            raise TypeError("minimum_count must be an integer")
+        if minimum_count < 0:
+            raise ValueError("minimum_count must be non-negative")
+        return self._iter_exact_candidate_ids(normalized_query, minimum_count)
+
+    def _iter_exact_candidate_ids(
+        self, normalized_query: str, minimum_count: int
+    ) -> Iterator[int]:
+
+        if not isinstance(normalized_query, str):
+            raise TypeError("normalized_query must be a string")
+        if not normalized_query:
+            return iter(())
+        if len(normalized_query) <= 3:
+            return iter(self.get_exact_candidate_ids(normalized_query))
+
+        keys = {
+            (3, normalized_query[offset : offset + 3])
+            for offset in range(len(normalized_query) - 2)
+        }
+        posting_lists = [self._postings.get(key, _EMPTY_POSTING) for key in keys]
+        if not posting_lists or any(not posting for posting in posting_lists):
+            return iter(())
+        posting_lists.sort(key=len)
+        if len(posting_lists) == 1:
+            return iter(posting_lists[0])
+        result = PostingArray(posting_lists[0])
+        for posting in posting_lists[1:]:
+            result = _intersect_sorted(result, posting)
+            if len(result) < minimum_count or not result:
+                break
+        if len(result) < minimum_count:
+            return iter(())
+        return iter(result)
